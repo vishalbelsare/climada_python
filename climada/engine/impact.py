@@ -943,15 +943,7 @@ class Impact():
         freq_cen = freq[imp_th]
         if not imp_cen.size:
             return np.zeros((return_periods.size,))
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                pol_coef = np.polyfit(np.log(freq_cen), imp_cen, deg=1)
-        except ValueError:
-            pol_coef = np.polyfit(np.log(freq_cen), imp_cen, deg=0)
-        imp_fit = np.polyval(pol_coef, np.log(1 / return_periods))
-        wrong_inten = (return_periods > np.max(1 / freq_cen)) & np.isnan(imp_fit)
-        imp_fit[wrong_inten] = 0.
+        imp_fit = np.interp(return_periods, 1/freq_cen, imp_cen)
 
         return imp_fit
 

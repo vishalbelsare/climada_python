@@ -943,7 +943,7 @@ class Impact():
         freq_cen = freq[imp_th]
         if not imp_cen.size:
             return np.zeros((return_periods.size,))
-        imp_fit = np.interp(return_periods, 1/freq_cen, imp_cen)
+        imp_fit = np.interp(return_periods, 1/freq_cen[::-1], imp_cen[::-1])
 
         return imp_fit
 

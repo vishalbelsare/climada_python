@@ -8,28 +8,51 @@ User guide
 ----------
 
 .. toctree::
-   :maxdepth: 2
-   guide/Guide_Get_Started
+   :maxdepth: 1
+
+   guide/Guide_get_started
    guide/Guide_Introduction
    guide/Guide_Installation
-   guide/Guide_CLIMADA_Tutorial
-   guide/Guide_PythonDos-n-Donts
    guide/Guide_Euler
-   guide/Py_Performance
-   guide/Guide_Miscellaneous
 
-----------
-Developer guide
-----------
+---------
+Tutorials
+---------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
-   guide/Guide_Configuration
+   tutorial/1_main_climada
+   tutorial/climada_entity_Exposures
+   tutorial/climada_entity_LitPop
+   tutorial/climada_entity_ImpactFuncSet
+   tutorial/climada_entity_DiscRates
+   tutorial/climada_entity_Exposures_polygons_lines
+   tutorial/climada_entity_MeasureSet
+   tutorial/climada_hazard_Hazard
+   tutorial/climada_hazard_TropCyclone
+   tutorial/climada_hazard_StormEurope
+   tutorial/climada_hazard_TCSurgeBathtub
+   tutorial/climada_engine_Impact
+   tutorial/climada_engine_impact_data
+   tutorial/climada_engine_Forecast
+   tutorial/climada_util_yearsets
+
+---------------
+Developer guide
+---------------
+
+.. toctree::
+   :maxdepth: 1
+
    guide/Guide_Git_Development
+   guide/Guide_CLIMADA_Tutorial
+   guide/Guide_Configuration
    guide/Guide_Continuous_Integration_and_Testing
    guide/Guide_Reviewer_Checklist
-
+   guide/Guide_PythonDos-n-Donts
+   guide/Guide_Py_Performance
+   guide/Guide_Miscellaneous
 
 ----------------------
 Software documentation

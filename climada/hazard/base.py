@@ -1309,15 +1309,7 @@ class Hazard():
         freq_cen = freq[inten_th]
         if not inten_cen.size:
             return np.zeros((return_periods.size,))
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                pol_coef = np.polyfit(np.log(freq_cen), inten_cen, deg=1)
-        except ValueError:
-            pol_coef = np.polyfit(np.log(freq_cen), inten_cen, deg=0)
-        inten_fit = np.polyval(pol_coef, np.log(1 / return_periods))
-        wrong_inten = (return_periods > np.max(1 / freq_cen)) & np.isnan(inten_fit)
-        inten_fit[wrong_inten] = 0.
+        inten_fit = np.interp(return_periods, 1/freq_cen[::-1], inten_cen[::-1])
 
         return inten_fit
 

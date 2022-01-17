@@ -50,22 +50,30 @@ def download_icon_grib(run_datetime,
     """download the gribfiles of a weather forecast run for a certain
     weather parameter from opendata.dwd.de/weather/nwp/.
 
-    Parameters:
-        run_datetime (datetime): The starting timepoint of the forecast run
-        model_name (str): the name of the forecast model written as it appears
-            in the folder structure in opendata.dwd.de/weather/nwp/ or 'test'
-        parameter_name (str): the name of the meteorological parameter
-            written as it appears in the folder structure in
-            opendata.dwd.de/weather/nwp/
-        max_lead_time (int): number of hours for which files should be
-            downloaded, will default to maximum available data
-        download_dir: (str or Path): directory where the downloaded files
-            should be saved in
+    Parameters
+    ----------
+    run_datetime : datetime
+        The starting timepoint of the forecast run
+    model_name : str
+        the name of the forecast model written as it appears
+        in the folder structure in opendata.dwd.de/weather/nwp/ or 'test'
+    parameter_name : str
+        the name of the meteorological parameter
+        written as it appears in the folder structure in
+        opendata.dwd.de/weather/nwp/
+    max_lead_time : int
+        number of hours for which files should be
+        downloaded, will default to maximum available data
+    download_dir: : str or Path
+        directory where the downloaded files
+        should be saved in
 
-    Returns:
-        file_names (list): a list of filenames that link to all just
-            downloaded or available files from the forecast run, defined by
-            the input parameters
+    Returns
+    -------
+    file_names : list
+        a list of filenames that link to all just
+        downloaded or available files from the forecast run, defined by
+        the input parameters
     """
 
     LOGGER.info(('Downloading icon grib files of model ' +
@@ -114,17 +122,23 @@ def delete_icon_grib(run_datetime,
     """delete the downloaded gribfiles of a weather forecast run for a
     certain weather parameter from opendata.dwd.de/weather/nwp/.
 
-    Parameters:
-        run_datetime (datetime): The starting timepoint of the forecast run
-        model_name (str): the name of the forecast model written as it appears
-            in the folder structure in opendata.dwd.de/weather/nwp/
-        parameter_name (str): the name of the meteorological parameter
-            written as it appears in the folder structure in
-            opendata.dwd.de/weather/nwp/
-        max_lead_time (int): number of hours for which files should be
-            deleted, will default to maximum available data
-        download_dir (str or Path): directory where the downloaded files
-            are stored at the moment
+    Parameters
+    ----------
+    run_datetime : datetime
+        The starting timepoint of the forecast run
+    model_name : str
+        the name of the forecast model written as it appears
+        in the folder structure in opendata.dwd.de/weather/nwp/
+    parameter_name : str
+        the name of the meteorological parameter
+        written as it appears in the folder structure in
+        opendata.dwd.de/weather/nwp/
+    max_lead_time : int
+        number of hours for which files should be
+        deleted, will default to maximum available data
+    download_dir : str or Path
+        directory where the downloaded files
+        are stored at the moment
     """
 
     _, file_name, lead_times = _create_icon_grib_name(run_datetime,
@@ -151,32 +165,49 @@ def _create_icon_grib_name(run_datetime,
     forecast run for a certain weather parameter from
     opendata.dwd.de/weather/nwp/.
 
-    Parameters:
-        run_datetime (datetime): The starting timepoint of the forecast run
-        model_name (str): the name of the forecast model written as it appears
-            in the folder structure in opendata.dwd.de/weather/nwp/
-        parameter_name (str): the name of the meteorological parameter
-            written as it appears in the folder structure in
-            opendata.dwd.de/weather/nwp/
-        max_lead_time (int): number of hours for which files should be
-            selected, will default to maximum available data
+    Parameters
+    ----------
+    run_datetime : datetime
+        The starting timepoint of the forecast run
+    model_name : str
+        the name of the forecast model written as it appears
+        in the folder structure in opendata.dwd.de/weather/nwp/
+    parameter_name : str
+        the name of the meteorological parameter
+        written as it appears in the folder structure in
+        opendata.dwd.de/weather/nwp/
+    max_lead_time : int
+        number of hours for which files should be
+        selected, will default to maximum available data
 
-    Returns:
-        url (str): url where the gribfiles are stored on opendata.dwd.de
-        file_name (str): filenames of gribfiles (lead_time missing)
-        lead_times (np.array): array of integers representing the leadtimes
-            in hours, which are available for download
+    Returns
+    -------
+    url : str
+        url where the gribfiles are stored on opendata.dwd.de
+    file_name : str
+        filenames of gribfiles (lead_time missing)
+    lead_times : np.array
+        array of integers representing the leadtimes
+        in hours, which are available for download
     """
     # define defaults of the url for each model and parameter combination
     if (model_name == 'icon-eu-eps') & (parameter_name == 'vmax_10m'):
-        file_extension = '_europe_icosahedral_single-level_'
+        file_extension = '_europe_icosahedral_single-level_' #this string completes the filename on the server
+        file_extension_2 = '' #this string completes the filename on the server
         max_lead_time_default = 120 # maximum available data
         lead_times = np.concatenate((np.arange(1, 49),
                                      np.arange(51, 73, 3),
                                      np.arange(78, 121, 6)
                                      ))
+    elif (model_name == 'icon-d2-eps') & (parameter_name == 'vmax_10m'):
+        file_extension = '_germany_icosahedral_single-level_' #this string completes the filename on the server
+        file_extension_2 = '_2d' #this string completes the filename on the server
+        max_lead_time_default = 48 # maximum available data
+        lead_times = np.concatenate((np.arange(1, 49),
+                                     ))
     elif model_name == 'test':
-        file_extension = '_storm_europe_icon_'
+        file_extension = '_storm_europe_icon_' #this string completes the filename on the server
+        file_extension_2 = '' #this string completes the filename on the server
         max_lead_time_default = 2 # maximum available data
         lead_times = np.concatenate((np.arange(1, 49),
                                      np.arange(51, 73, 3),
@@ -200,6 +231,7 @@ def _create_icon_grib_name(run_datetime,
                  run_datetime.strftime('%Y%m%d%H') +
                  '_' +
                  '{lead_i:03}' +
+                 file_extension_2 +
                  '_' +
                  parameter_name +
                  '.grib2.bz2')
@@ -226,14 +258,20 @@ def download_icon_centroids_file(model_name='icon-eu-eps',
     https://www.dwd.de/DE/leistungen/opendata/neuigkeiten/opendata_dez2018_02.html
     https://www.dwd.de/DE/leistungen/opendata/neuigkeiten/opendata_aug2020_01.html
 
-    Parameters:
-        model_name (str): the name of the forecast model written as it appears
-            in the folder structure in opendata.dwd.de/weather/nwp/
-        download_dir (str or Path): directory where the downloaded files
-            should be saved in
-    Returns:
-        file_name (str): absolute path and filename of the downloaded
-            and decompressed netcdf file
+    Parameters
+    ----------
+    model_name : str
+        the name of the forecast model written as it appears
+        in the folder structure in opendata.dwd.de/weather/nwp/
+    download_dir : str or Path
+        directory where the downloaded files
+        should be saved in
+
+    Returns
+    -------
+    file_name : str
+        absolute path and filename of the downloaded
+        and decompressed netcdf file
     """
 
     # define url and filename

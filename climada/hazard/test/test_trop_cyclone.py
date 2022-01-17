@@ -21,24 +21,25 @@ Test TropCyclone class
 
 import unittest
 import datetime as dt
+from pathlib import Path
 import numpy as np
 from scipy import sparse
 
-from climada import CONFIG
 from climada.util import ureg
 from climada.hazard.tc_tracks import TCTracks
 from climada.hazard.trop_cyclone import (
     TropCyclone, _close_centroids, _vtrans, _B_holland_1980, _bs_holland_2008,
     _v_max_s_holland_2008, _x_holland_2010, _stat_holland_1980, _stat_holland_2010)
 from climada.hazard.centroids.centr import Centroids
+import climada.hazard.test as hazard_test
 
-DATA_DIR = CONFIG.hazard.test_data.dir()
+DATA_DIR = Path(hazard_test.__file__).parent.joinpath('data')
+
 HAZ_TEST_MAT = DATA_DIR.joinpath('atl_prob_no_name.mat')
 TEST_TRACK = DATA_DIR.joinpath("trac_brb_test.csv")
 TEST_TRACK_SHORT = DATA_DIR.joinpath("trac_short_test.csv")
 
-CENTR_TEST_BRB = Centroids()
-CENTR_TEST_BRB.read_mat(DATA_DIR.joinpath('centr_brb_test.mat'))
+CENTR_TEST_BRB = Centroids.from_mat(DATA_DIR.joinpath('centr_brb_test.mat'))
 
 
 class TestReader(unittest.TestCase):
@@ -59,15 +60,13 @@ class TestReader(unittest.TestCase):
         for i, val in enumerate(intensity_values["geosphere"]):
             self.assertAlmostEqual(intensity_values["equirect"][i], val, 1)
 
-        tc_track = TCTracks()
-        tc_track.read_processed_ibtracs_csv(TEST_TRACK)
+        tc_track = TCTracks.from_processed_ibtracs_csv(TEST_TRACK)
         tc_track.equal_timestep()
         tc_track.data = tc_track.data[:1]
 
         for metric in ["equirect", "geosphere"]:
-            tc_haz = TropCyclone()
-            tc_haz.set_from_tracks(tc_track, centroids=CENTR_TEST_BRB, model='H08',
-                                   store_windfields=True, metric=metric)
+            tc_haz = TropCyclone.from_tracks(tc_track, centroids=CENTR_TEST_BRB, model='H08',
+                                             store_windfields=True, metric=metric)
 
             self.assertEqual(tc_haz.tag.haz_type, 'TC')
             self.assertEqual(tc_haz.tag.description, '')
@@ -119,14 +118,12 @@ class TestReader(unittest.TestCase):
                       0, 25.715983, 38.351686, 35.591153,  0, 46.873912],
         }
 
-        tc_track = TCTracks()
-        tc_track.read_processed_ibtracs_csv(TEST_TRACK)
+        tc_track = TCTracks.from_processed_ibtracs_csv(TEST_TRACK)
         tc_track.equal_timestep()
         tc_track.data = tc_track.data[:1]
 
         for model in ["H08", "H10", "H1980"]:
-            tc_haz = TropCyclone()
-            tc_haz.set_from_tracks(tc_track, centroids=CENTR_TEST_BRB, model=model)
+            tc_haz = TropCyclone.from_tracks(tc_track, centroids=CENTR_TEST_BRB, model=model)
             np.testing.assert_array_almost_equal(
                 tc_haz.intensity[0, intensity_idx].toarray()[0], intensity_values[model])
             for idx, val in zip(intensity_idx, intensity_values[model]):
@@ -134,11 +131,9 @@ class TestReader(unittest.TestCase):
                     self.assertEqual(tc_haz.intensity[0, idx], 0)
 
     def test_set_one_file_pass(self):
-        """Test set function set_from_tracks with one input."""
-        tc_track = TCTracks()
-        tc_track.read_processed_ibtracs_csv(TEST_TRACK_SHORT)
-        tc_haz = TropCyclone()
-        tc_haz.set_from_tracks(tc_track, CENTR_TEST_BRB)
+        """Test from_tracks with one input."""
+        tc_track = TCTracks.from_processed_ibtracs_csv(TEST_TRACK_SHORT)
+        tc_haz = TropCyclone.from_tracks(tc_track, centroids=CENTR_TEST_BRB)
         tc_haz.check()
 
         self.assertEqual(tc_haz.tag.haz_type, 'TC')
@@ -163,11 +158,9 @@ class TestReader(unittest.TestCase):
         self.assertEqual(tc_haz.intensity.nonzero()[0].size, 0)
 
     def test_two_files_pass(self):
-        """Test set function set_from_tracks with two ibtracs."""
-        tc_track = TCTracks()
-        tc_track.read_processed_ibtracs_csv([TEST_TRACK_SHORT, TEST_TRACK_SHORT])
-        tc_haz = TropCyclone()
-        tc_haz.set_from_tracks(tc_track, CENTR_TEST_BRB)
+        """Test from_tracks with two ibtracs."""
+        tc_track = TCTracks.from_processed_ibtracs_csv([TEST_TRACK_SHORT, TEST_TRACK_SHORT])
+        tc_haz = TropCyclone.from_tracks(tc_track, centroids=CENTR_TEST_BRB)
         tc_haz.remove_duplicates()
         tc_haz.check()
 
@@ -285,8 +278,7 @@ class TestWindfieldHelpers(unittest.TestCase):
 
     def test_vtrans_pass(self):
         """Test _vtrans function. Compare to MATLAB reference."""
-        tc_track = TCTracks()
-        tc_track.read_processed_ibtracs_csv(TEST_TRACK)
+        tc_track = TCTracks.from_processed_ibtracs_csv(TEST_TRACK)
         tc_track.equal_timestep()
 
         v_trans, _ = _vtrans(
@@ -316,7 +308,7 @@ class TestClimateSce(unittest.TestCase):
         tc.event_id = np.arange(4)
         tc.frequency = np.ones(4) * 0.5
 
-        tc_cc = tc.set_climate_scenario_knu(ref_year=2050, rcp_scenario=45)
+        tc_cc = tc.apply_climate_scenario_knu(ref_year=2050, rcp_scenario=45)
         self.assertTrue(np.allclose(tc.intensity[1, :].toarray(), tc_cc.intensity[1, :].toarray()))
         self.assertTrue(np.allclose(tc.intensity[3, :].toarray(), tc_cc.intensity[3, :].toarray()))
         self.assertFalse(

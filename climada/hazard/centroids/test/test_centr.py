@@ -19,6 +19,7 @@ with CLIMADA. If not, see <https://www.gnu.org/licenses/>.
 Test CentroidsVector and CentroidsRaster classes.
 """
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -27,9 +28,9 @@ import geopandas as gpd
 from climada import CONFIG
 from climada.hazard.centroids.centr import Centroids
 from climada.util.constants import GLB_CENTROIDS_MAT, HAZ_TEMPLATE_XLS
+import climada.hazard.test as hazard_test
 
-HAZ_DIR = CONFIG.hazard.test_data.dir()
-HAZ_TEST_MAT = HAZ_DIR.joinpath('atl_prob_no_name.mat')
+HAZ_TEST_MAT = Path(hazard_test.__file__).parent / 'data' / 'atl_prob_no_name.mat'
 
 
 class TestCentroidsReader(unittest.TestCase):
@@ -37,8 +38,7 @@ class TestCentroidsReader(unittest.TestCase):
 
     def test_mat_pass(self):
         """Read a centroid mat file correctly."""
-        centroids = Centroids()
-        centroids.read_mat(HAZ_TEST_MAT)
+        centroids = Centroids.from_mat(HAZ_TEST_MAT)
 
         n_centroids = 100
         self.assertEqual(centroids.coord.shape, (n_centroids, 2))
@@ -49,16 +49,14 @@ class TestCentroidsReader(unittest.TestCase):
 
     def test_mat_global_pass(self):
         """Test read GLB_CENTROIDS_MAT"""
-        centroids = Centroids()
-        centroids.read_mat(GLB_CENTROIDS_MAT)
+        centroids = Centroids.from_mat(GLB_CENTROIDS_MAT)
 
         self.assertEqual(centroids.region_id[1062443], 35)
         self.assertEqual(centroids.region_id[170825], 28)
 
     def test_centroid_pass(self):
         """Read a centroid excel file correctly."""
-        centroids = Centroids()
-        centroids.read_excel(HAZ_TEMPLATE_XLS)
+        centroids = Centroids.from_excel(HAZ_TEMPLATE_XLS)
 
         n_centroids = 45
         self.assertEqual(centroids.coord.shape[0], n_centroids)
@@ -135,7 +133,7 @@ class TestCentroidsMethods(unittest.TestCase):
         np.testing.assert_array_equal(cent.lon, [0, -1, -2, 3])
         np.testing.assert_array_equal(cent.on_land, [True, True, False, False])
 
-        cent = Centroids().union(cent1)
+        cent = Centroids.union(cent1)
         np.testing.assert_array_equal(cent.lat, [0, 1])
         np.testing.assert_array_equal(cent.lon, [0, -1])
         np.testing.assert_array_equal(cent.on_land, [True, True])
@@ -145,20 +143,15 @@ class TestCentroidsMethods(unittest.TestCase):
         np.testing.assert_array_equal(cent.lon, [0, -1])
         np.testing.assert_array_equal(cent.on_land, [True, True])
 
-        cent = Centroids().union(cent1, cent2, cent3)
+        cent = Centroids.union(cent1, cent2, cent3)
         np.testing.assert_array_equal(cent.lat, [0, 1, 2, 3, -1, -2])
         np.testing.assert_array_equal(cent.lon, [0, -1, -2, 3, 1, 2])
 
 
     def test_union_meta(self):
-        cent1 = Centroids()
-        cent1.set_raster_from_pnt_bounds((-1, -1, 0, 0), res=1)
-
-        cent2 = Centroids()
-        cent2.set_raster_from_pnt_bounds((0, 0, 1, 1), res=1)
-
-        cent3 = Centroids()
-        cent3.lat, cent3.lon = np.array([1]), np.array([1])
+        cent1 = Centroids.from_pnt_bounds((-1, -1, 0, 0), res=1)
+        cent2 = Centroids.from_pnt_bounds((0, 0, 1, 1), res=1)
+        cent3 = Centroids.from_lat_lon(np.array([1]), np.array([1]))
 
         cent = cent1.union(cent2)
         np.testing.assert_array_equal(cent.lat, [0,  0, -1, -1,  1,  1,  0])

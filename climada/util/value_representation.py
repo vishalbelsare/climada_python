@@ -88,10 +88,22 @@ def sig_dig_list(iterable, n_sig_dig=16):
     """
     return np.vectorize(sig_dig)(iterable, n_sig_dig)
 
+def convert_monetary_value(values, abbrev, n_sig_dig=None):
+
+    if isinstance(values, (int, float)):
+        values = [values]
+
+    thsder = list(ABBREV.keys())[list(ABBREV.values()).index(abbrev)]
+    mon_val = np.array(values) / thsder
+    if n_sig_dig is not None:
+        mon_val = [sig_dig(val, n_sig_dig=n_sig_dig) for val in mon_val]
+
+    return mon_val
+
 
 def value_to_monetary_unit(values, n_sig_dig=None, abbreviations=None):
     """
-    Converts list of values to closest common monetary unit 
+    Converts list of values to closest common monetary unit
     0, Nan and inf have not unit.
 
     Parameters
@@ -118,7 +130,7 @@ def value_to_monetary_unit(values, n_sig_dig=None, abbreviations=None):
         Array of values in monetary unit
     name : string
         Monetary unit
-        
+
     Examples
     --------
     values = [1e6, 2*1e6, 4.5*1e7, 0, Nan, inf] ->

@@ -143,6 +143,28 @@ def impact_yearset_from_sampling_vect(imp, sampled_years, sampling_vect, correct
 
     return yimp
 
+def extract_from_matrix(mat, sampling_vec):
+    """
+    Extract sampled events from impact matrix
+
+    Parameters
+    ----------
+    mat : scipy.sparse.csr_matrix
+        Impact matrix to sample from
+    sampling_vec : 2D np.array()
+        Array of ids (row index) of selected events per year.
+
+    Returns
+    -------
+    scipy.sparse.csr_matrix
+        Impact matrix of selected sample of events
+
+    """
+    sampling_vec = sampling_vec.ravel()
+    return mat[sampling_vec, :]
+
+def rename_event_in_sample(event_names, sampling_vec):
+
 
 def sample_from_poisson(n_sampled_years, lam):
     """Sample the number of events for n_sampled_years
@@ -166,7 +188,6 @@ def sample_from_poisson(n_sampled_years, lam):
     else:
         events_per_year = np.ones(len(n_sampled_years))
 
-
     return events_per_year
 
 def sample_events(events_per_year, freqs_orig):
@@ -177,17 +198,17 @@ def sample_events(events_per_year, freqs_orig):
 
     Parameters
     -----------
-        events_per_year : array
-            Number of events per sampled year
-        freqs_orig : array
-            Frequency of each input event
+    events_per_year : array
+        Number of events per sampled year
+    freqs_orig : array
+        Frequency of each input event
 
     Returns
     -------
-        sampling_vect : 2D array
-            The sampling vector specifies how to sample the yimp, it consists of one
-            sub-array per sampled_year, which contains the event_ids of the events used to
-            calculate the annual impacts.
+    sampling_vect : list[np.array]
+        The sampling vector specifies how to sample the yimp, it consists of one
+        sub-array per sampled_year, which contains the event_ids of the events used to
+        calculate the annual impacts.
       """
 
     sampling_vect = []

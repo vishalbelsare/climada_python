@@ -1114,7 +1114,7 @@ class Impact():
     def set_imp_mat(self, imp_mat):
         """
         Set Impact attributes from the impact matrix. Returns a copy.
-        Overwrites eai_exp, at_event, aai_agg, imp_mat.
+        Overwrites eai_exp, at_event, aai_agg, imp_mat
 
         Parameters
         ----------
@@ -1130,7 +1130,6 @@ class Impact():
         imp.at_event = self.at_event_from_mat(imp_mat)
         imp.aai_agg = self.aai_agg_from_at_event(imp.at_event, imp.frequency)
         imp.imp_mat = imp_mat
-        imp.event_id
         return imp
 
     def eai_exp_from_mat(self, imp_mat, freq):

@@ -160,11 +160,11 @@ def extract_from_matrix(mat, sampling_vec):
         Impact matrix of selected sample of events
 
     """
-    sampling_vec = sampling_vec.ravel()
+    sampling_vec = np.concatenate(sampling_vec)
     return mat[sampling_vec, :]
 
 def rename_event_in_sample(event_names, sampling_vec):
-
+    pass
 
 def sample_from_poisson(n_sampled_years, lam):
     """Sample the number of events for n_sampled_years

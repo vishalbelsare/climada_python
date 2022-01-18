@@ -163,7 +163,7 @@ def extract_from_matrix(mat, sampling_vec):
     sampling_vec = np.concatenate(sampling_vec)
     return mat[sampling_vec, :]
 
-def set_date_event_in_sample(years, dates, sampling_vec):
+def year_date_event_in_sample(years, dates, sampling_vec):
     if len(years) != len(sampling_vec):
         raise ValueError("The number of years is different from the length" +
                          "of the sampling vector")
@@ -177,8 +177,6 @@ def set_date_event_in_sample(years, dates, sampling_vec):
         for year, events in zip(years, sampling_vec)
         for date in np.array(dates)[events]
         ]
-
-set_date_event_in_sample([2010, 2022], [u_dt.str_to_date('2001-01-01'), u_dt.str_to_date('2001-10-01')], [np.array([1]), np.array([0,1])])
 
 def sample_from_poisson(n_sampled_years, lam):
     """Sample the number of events for n_sampled_years

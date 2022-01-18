@@ -143,7 +143,7 @@ def impact_yearset_from_sampling_vect(imp, sampled_years, sampling_vect, correct
 
     return yimp
 
-def extract_from_matrix(mat, sampling_vec):
+def extract_event_matrix(mat, sampling_vec):
     """
     Extract sampled events from impact matrix
 
@@ -151,7 +151,7 @@ def extract_from_matrix(mat, sampling_vec):
     ----------
     mat : scipy.sparse.csr_matrix
         Impact matrix to sample from
-    sampling_vec : 2D np.array()
+    sampling_vec : list[array()]
         Array of ids (row index) of selected events per year.
 
     Returns
@@ -164,6 +164,29 @@ def extract_from_matrix(mat, sampling_vec):
     return mat[sampling_vec, :]
 
 def year_date_event_in_sample(years, dates, sampling_vec):
+    """
+    Change the year for the sampled events
+
+    Parameters
+    ----------
+    years : list[int]
+        Years of sampled events (length equal to lenght of sampling_vec)
+    dates : list[dates]
+        List of dates in ordinal format for the whole event set
+    sampling_vec : list[np.array]
+        Array of ids (row index) of selected events per year.
+
+    Raises
+    ------
+    ValueError
+        length of years must equal length of sampling_vec
+
+    Returns
+    -------
+    list[dates]
+        List with dates in ordinal format of the sampled events.
+
+    """
     if len(years) != len(sampling_vec):
         raise ValueError("The number of years is different from the length" +
                          "of the sampling vector")
@@ -177,6 +200,24 @@ def year_date_event_in_sample(years, dates, sampling_vec):
         for year, events in zip(years, sampling_vec)
         for date in np.array(dates)[events]
         ]
+
+def frequency_for_sample(sampling_vec):
+    """
+    Generate frequency vector for selected sample of events
+
+    Parameters
+    ----------
+    sampling_vec : list[np.array]
+        List of selected events per year
+
+    Returns
+    -------
+    np.array
+        Frequency (1/year) of each sampled event
+
+    """
+    return np.ones(np.size(sampling_vec))
+
 
 def sample_from_poisson(n_sampled_years, lam):
     """Sample the number of events for n_sampled_years

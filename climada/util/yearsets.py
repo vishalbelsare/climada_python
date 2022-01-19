@@ -228,7 +228,7 @@ def aggregate_impact_to_year(imp, exp=None):
     impact.set_imp_mat(imp_mat)
     impact.date = u_dt.str_to_date([str(date) + '-01-01' for date in years_from_imp(imp)])
     impact.event_id = np.arange(1, len(impact.at_event) + 1)
-    impact.frequency = np.ones(len(impact.at_event))
+    impact.frequency = np.ones / len(impact.date)
     impact.tag['yimp object'] = True
     return impact
 

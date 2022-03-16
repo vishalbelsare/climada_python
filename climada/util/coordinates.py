@@ -2111,6 +2111,108 @@ def write_raster(file_name, data_matrix, meta, dtype=np.float32):
     with rasterio.open(file_name, 'w', **dst_meta) as dst:
         dst.write(data_matrix, indexes=np.arange(1, shape[0] + 1))
 
+
+def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=DEF_CRS, meta=None):
+    """
+    Given a dataframe of points on a regular grid, but which don't include every point on that grid,
+    add the missing points. Other columns receive missing values at the added points.
+
+    Results are sorted by decreasing latitude and increasing longitude (ready for writing to raster).
+    If your points are not on a regular grid, or if you have multiple entries at single locations,
+    use points_to_raster instead.
+
+    Note: if you provide a data frame with a geometry column, the missing values won't have geometries
+    assigned. If you need these you have to set the geometries again.
+
+    Parameters
+    ----------
+    points_df: DataFrame
+        contains columns latitude, longitude
+    snap_to_raster: boolean
+        The coordinates of the input data frame will usually differ very slightly from the coordinates
+        of the inferred raster grid, often just from rounding errors. If you are working with multiple datasets on the
+        same coordinates, you will want to be careful that they match. Setting to True will adjust
+        latitudes and longitudes to match those generated from the rastermeta object. Setting to False will preserve the
+        original values of the input GeoDataFrame (with raster values filling the missing points).
+    min_resol: float
+        minimum resolution to consider. Differences smaller than this order of magnitude are considered negligible
+        (usually due to rounding errors). If the method is inferring a huge, high-resolution grid, it's usually safe to
+        increase this to 1/10 the expected resolution. Passed to get_resolution. Default 1.0e-8.
+    crs : object (anything accepted by pyproj.CRS.from_user_input), optional
+        If given, overwrites the CRS information given in `points_df`. If no CRS is explicitly
+        given and there is no CRS information in `points_df`, the CRS is assumed to be EPSG:4326
+        (lat/lon). Default: None
+    meta: dict
+        Dictionary with 'crs', 'height', 'width' and 'transform' attributes. If not set, these are inferred from
+        the input. Overrides the crs parameter when set.
+
+    Returns
+    -------
+    out: DataFrame or GeoDataFrame
+        The input data frame with added grid cells. Sorted by decreasing latitude then increasing longitude.
+    meta: dict
+        Dictionary with 'crs', 'height', 'width' and 'transform' attributes.
+    """
+    df = copy.deepcopy(points_df)
+
+    if not meta:
+        bounds = latlon_bounds(df['lat'], df['lon'])
+        res = get_resolution(df['lon'], df['lat'], min_resol=min_resol)
+        nrow, ncol, trans = pts_to_raster_meta(bounds, res)
+        meta = {"width": ncol, "height": nrow, "transform": trans, "crs": crs}
+
+    lon_full, lat_full = raster_to_meshgrid(meta['transform'], meta['width'], meta['height'])
+    out = pd.DataFrame({'lat': lat_full.flatten(), 'lon': lon_full.flatten()})
+
+    precision = -int(np.floor(np.log10(abs(min_resol))))  # precision is number of decimal places in min_resol param
+    out['lat_trunc'] = np.round(out['lat'], precision)  # out has every grid point as defined by the raster meta
+    out['lon_trunc'] = np.round(out['lon'], precision)
+    df['lat_trunc'] = np.round(df['lat'], precision)  # points_df has the input grid points
+    df['lon_trunc'] = np.round(df['lon'], precision)
+
+    if snap_to_raster:
+        # return matches on the raster-defined lat and lon values
+        out = out.merge(
+            df.drop(['lat', 'lon'], axis=1, inplace=False),
+            how='left',
+            on=['lat_trunc', 'lon_trunc'],
+            indicator=True
+        )
+    else:
+        # preserve the user-supplied lat and lon values when available
+        out.rename(columns={'lat': 'raster_lat', 'lon': 'raster_lon'}, inplace=True)
+        out = out.merge(
+            df,
+            how='left',
+            on=['lat_trunc', 'lon_trunc'],
+            indicator=True
+        )
+        out['lat'] = out['lat'].where(out['lat'].notnull(), out['raster_lat'])
+        out['lon'] = out['lon'].where(out['lon'].notnull(), out['raster_lon'])
+        out.drop(['raster_lat', 'raster_lon'], axis=1, inplace=True)
+
+    unmatched_values = df.shape[0] - sum(out['_merge'] == 'both')
+    if unmatched_values != 0:
+        raise ValueError('Could not match all input coordinates to the grid. \
+            If you supplied a meta, check it agrees with the data. Otherwise increasing min_resol sometimes helps. \
+            Unmatched values: ' + str(unmatched_values))
+
+    out.drop(['lat_trunc', 'lon_trunc', '_merge'], axis=1, inplace=True)
+
+
+    expected_rows = meta['width'] * meta['height']
+    if out.shape[0] != expected_rows:
+        raise ValueError(
+            "Unexpected number of entries after merge. Expected %s x %s = %s. Found %s. \
+            Most likely the input data frame had multiple rows for a single point",
+            meta['width'], meta['height'], expected_rows, out.shape[0])
+
+    if isinstance(df, gpd.GeoDataFrame):
+        out = gpd.GeoDataFrame(out)
+
+    return out, meta
+
+
 def points_to_raster(points_df, val_names=None, res=0.0, raster_res=0.0, crs=DEF_CRS,
                      scheduler=None):
     """Compute raster (as data and transform) from GeoDataFrame.
@@ -2374,7 +2476,8 @@ def mask_raster_with_geometry(raster, transform, shapes, nodata=None, **kwargs):
             output, _ = rasterio.mask.mask(dataset, shapes, nodata=nodata, **kwargs)
     return output.squeeze(0)
 
-def set_df_geometry_points(df_val, scheduler=None, crs=None):
+
+def set_df_geometry_points(df_val, scheduler=None, crs=None, lat_col='latitude', lon_col='longitude'):
     """Set given geometry to given dataframe using dask if scheduler.
 
     Parameters
@@ -2385,6 +2488,10 @@ def set_df_geometry_points(df_val, scheduler=None, crs=None):
         used for dask map_partitions. “threads”, “synchronous” or “processes”
     crs : object (anything readable by pyproj4.CRS.from_user_input), optional
         Coordinate Reference System, if omitted or None: df_val.geometry.crs
+    lat_col: str, optional
+        Name of column containing latitude data. Default 'latitude'.
+    lon_col: str, optional
+        Name of column containing longitude data. Default 'longitude'.
     """
     LOGGER.info('Setting geometry points.')
 
@@ -2398,7 +2505,7 @@ def set_df_geometry_points(df_val, scheduler=None, crs=None):
     # work in parallel
     if scheduler:
         def apply_point(df_exp):
-            return df_exp.apply(lambda row: Point(row.longitude, row.latitude), axis=1)
+            return df_exp.apply(lambda row: Point(row[lon_col], row[lat_col]), axis=1)
 
         ddata = dd.from_pandas(df_val, npartitions=cpu_count())
         df_val['geometry'] = ddata.map_partitions(apply_point, meta=Point) \
@@ -2406,7 +2513,7 @@ def set_df_geometry_points(df_val, scheduler=None, crs=None):
     # single process
     else:
         df_val['geometry'] = gpd.GeoSeries(
-            gpd.points_from_xy(df_val.longitude, df_val.latitude), index=df_val.index, crs=crs)
+            gpd.points_from_xy(df_val[lon_col], df_val[lat_col]), index=df_val.index, crs=crs)
 
     # set crs
     if crs:

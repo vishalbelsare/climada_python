@@ -24,6 +24,7 @@ from pathlib import Path
 
 from cartopy.io import shapereader
 import geopandas as gpd
+import pandas as pd
 import numpy as np
 from pyproj.crs import CRS as PCRS
 import shapely
@@ -33,6 +34,7 @@ from rasterio.warp import Resampling
 from rasterio import Affine
 from rasterio.crs import CRS as RCRS
 import rasterio.transform
+import copy
 
 from climada import CONFIG
 from climada.util.constants import HAZ_DEMO_FL, DEF_CRS, ONE_LAT_KM
@@ -975,6 +977,71 @@ class TestRasterMeta(unittest.TestCase):
         self.assertEqual(ras_trans[5], ymax + res / 2)
         self.assertTrue(ymin >= ymax + res / 2 - rows * res)
         self.assertTrue(xmax <= xmin - res / 2 + cols * res)
+
+    def test_points_complete_grid_pass(self):
+        # Construct 'ground truth' raster
+        x, y = np.meshgrid(np.linspace(-2, 0, 4), np.linspace(50, 40, 3))
+        df_complete = pd.DataFrame({'lat': y.flatten(), 'lon': x.flatten(), 'value': 10, 'category': 'a'})
+
+        # We'll test the grid reconstruction on this subset
+        ix = np.array([
+            0, 0, 1, 1,
+            1, 0, 1, 1,
+            0, 0, 1, 1
+        ], dtype='bool')
+        df_complete.loc[~ix, ['value', 'category']] = np.NaN
+        df_partial = df_complete.loc[ix, ].reset_index(drop=True)
+
+        # Basic functionality
+        reconstructed, meta = u_coord.complete_points_grid(df_partial)
+        pd.testing.assert_frame_equal(df_complete, reconstructed)
+
+        # Lat and lon are corrected to raster grid when close (and requested)
+        df_close = copy.deepcopy(df_partial)
+        df_close.loc[0, 'lat'] += 0.0001
+        df_close.loc[0, 'lon'] -= 0.0001
+        reconstructed, _ = u_coord.complete_points_grid(df_close, snap_to_raster=True, min_resol=0.001)
+        pd.testing.assert_frame_equal(df_complete, reconstructed)
+
+        # ...but not when it isn't requested
+        reconstructed, _ = u_coord.complete_points_grid(df_close, snap_to_raster=False, min_resol=0.001)
+        with self.assertRaises(AssertionError):
+            pd.testing.assert_frame_equal(df_complete, reconstructed)
+        pd.testing.assert_series_equal(df_complete['lat'], reconstructed['lat'], atol=0.001)
+        pd.testing.assert_series_equal(df_complete['lon'], reconstructed['lon'], atol=0.001)
+
+        # It preserves DataFrame/GeoDataFrame types
+        gdf_partial = gpd.GeoDataFrame(df_partial)
+        reconstructed, _ = u_coord.complete_points_grid(gdf_partial, snap_to_raster=True)
+        pd.testing.assert_frame_equal(gpd.GeoDataFrame(df_complete), reconstructed)
+
+        reconstructed, _ = u_coord.complete_points_grid(gdf_partial, snap_to_raster=False)
+        pd.testing.assert_frame_equal(gpd.GeoDataFrame(df_complete), reconstructed)
+
+        # It works when given a meta to check against
+        reconstructed, _ = u_coord.complete_points_grid(df_partial, meta=meta)
+        pd.testing.assert_frame_equal(df_complete, reconstructed)
+
+        # ... and it still works when the meta isn't the one it would automatically choose
+        # (here: covering a larger area than the input)
+        tr = meta['transform']
+        meta_large = {
+            'width': meta['width'] + 1,
+            'height': meta['height'] + 1,
+            'crs': meta['crs'],
+            'transform': Affine(tr[0], tr[1], tr[2] - tr[0], tr[3], tr[4], tr[5] - tr[4])
+        }
+        reconstructed, _ = u_coord.complete_points_grid(df_partial, meta=meta_large)
+        ix = (reconstructed['lat'] <= 50) & (reconstructed['lon'] >= -2)
+        reconstructed = reconstructed.loc[ix, ].reset_index(drop=True)
+        pd.testing.assert_frame_equal(df_complete, reconstructed)
+
+        # ...but it fails when the meta disagrees completely
+        meta_bad = copy.deepcopy(meta_large)
+        meta_bad['transform'] = Affine(1, 2, 3, 4, 5, 6)
+        with self.assertRaises(ValueError):
+            u_coord.complete_points_grid(df_partial, meta=meta_bad)
+
 
     def test_pts_to_raster_irreg_pass(self):
         """Test pts_to_raster_meta with irregular points"""

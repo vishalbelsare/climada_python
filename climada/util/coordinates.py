@@ -2112,7 +2112,14 @@ def write_raster(file_name, data_matrix, meta, dtype=np.float32):
         dst.write(data_matrix, indexes=np.arange(1, shape[0] + 1))
 
 
-def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=DEF_CRS, meta=None):
+def complete_points_grid(
+        points_df,
+        snap_to_raster=False,
+        min_resol=1.0e-8,
+        crs=DEF_CRS,
+        col_lat='lat',
+        col_lon='lon',
+        meta=None):
     """
     Given a dataframe of points on a regular grid, but which don't include every point on that grid,
     add the missing points. Other columns receive missing values at the added points.
@@ -2127,14 +2134,14 @@ def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=
     Parameters
     ----------
     points_df: DataFrame
-        contains columns latitude, longitude
-    snap_to_raster: boolean
+        contains columns 'lat', 'lon' or 'latitude', 'longitude'
+    snap_to_raster: boolean, optional
         The coordinates of the input data frame will usually differ very slightly from the coordinates
         of the inferred raster grid, often just from rounding errors. If you are working with multiple datasets on the
         same coordinates, you will want to be careful that they match. Setting to True will adjust
         latitudes and longitudes to match those generated from the rastermeta object. Setting to False will preserve the
         original values of the input GeoDataFrame (with raster values filling the missing points).
-    min_resol: float
+    min_resol: float, optional
         minimum resolution to consider. Differences smaller than this order of magnitude are considered negligible
         (usually due to rounding errors). If the method is inferring a huge, high-resolution grid, it's usually safe to
         increase this to 1/10 the expected resolution. Passed to get_resolution. Default 1.0e-8.
@@ -2142,7 +2149,11 @@ def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=
         If given, overwrites the CRS information given in `points_df`. If no CRS is explicitly
         given and there is no CRS information in `points_df`, the CRS is assumed to be EPSG:4326
         (lat/lon). Default: None
-    meta: dict
+    col_lat: str, optional
+        Name of the column containing latitude data. Default 'lat'.
+    col_lon: str, optional
+        Name of the column containing longitude data. Default 'lon'.
+    meta: dict, optional
         Dictionary with 'crs', 'height', 'width' and 'transform' attributes. If not set, these are inferred from
         the input. Overrides the crs parameter when set.
 
@@ -2154,10 +2165,21 @@ def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=
         Dictionary with 'crs', 'height', 'width' and 'transform' attributes.
     """
     df = copy.deepcopy(points_df)
+    if col_lat != 'lat' and 'lat' in df.columns:
+        raise ValueError(f'This method wants to rename column "{col_lat}" to "lat" but the name is already in use')
+    if col_lon != 'lon' and 'lon' in df.columns:
+        raise ValueError(f'This method wants to rename column "{col_lon}" to "lon" but the name is already in use')
+    df.rename({col_lat: 'lat', col_lon: 'lon'}, axis=1, inplace=True, errors='ignore')
+
+    if df[['lat', 'lon']].isnull().any().any():
+        raise ValueError('Missing values present in latitude or longitude columns')
+
+    lon = np.sort(np.unique(df['lon']))
+    lat = -np.sort(-np.unique(df['lat']))
 
     if not meta:
-        bounds = latlon_bounds(df['lat'], df['lon'])
-        res = get_resolution(df['lon'], df['lat'], min_resol=min_resol)
+        bounds = latlon_bounds(lat, lon)
+        res = get_resolution(lon, lat, min_resol=min_resol)
         nrow, ncol, trans = pts_to_raster_meta(bounds, res)
         meta = {"width": ncol, "height": nrow, "transform": trans, "crs": crs}
 
@@ -2207,6 +2229,7 @@ def complete_points_grid(points_df, snap_to_raster=False, min_resol=1.0e-8, crs=
             Most likely the input data frame had multiple rows for a single point",
             meta['width'], meta['height'], expected_rows, out.shape[0])
 
+    out.rename({'lat': col_lat, 'lon': col_lon}, axis=1, inplace=True, errors='ignore')
     if isinstance(df, gpd.GeoDataFrame):
         out = gpd.GeoDataFrame(out)
 

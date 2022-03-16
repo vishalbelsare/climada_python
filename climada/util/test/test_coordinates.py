@@ -1042,6 +1042,24 @@ class TestRasterMeta(unittest.TestCase):
         with self.assertRaises(ValueError):
             u_coord.complete_points_grid(df_partial, meta=meta_bad)
 
+        # It can handle weird ordering of the data
+        df_unordered = df_partial.loc[[6, 3, 4, 0, 1, 5, 2], ]
+        reconstructed, _ = u_coord.complete_points_grid(df_unordered)
+        pd.testing.assert_frame_equal(df_complete, reconstructed)
+
+        # It can handle lat and lon columns with different names
+        df_longnames = df_partial.rename({'lat': 'latitude', 'lon': 'longitude'}, axis=1, inplace=False)
+        df_complete_longnames = df_complete.rename({'lat': 'latitude', 'lon': 'longitude'}, axis=1, inplace=False)
+        reconstructed, _ = u_coord.complete_points_grid(df_longnames, col_lat='latitude', col_lon='longitude')
+        pd.testing.assert_frame_equal(df_complete_longnames, reconstructed)
+
+        # It fails with missing lat or lon values
+        df_missing_lat = copy.deepcopy(df_partial)
+        df_missing_lat.loc[0, 'lat'] = np.nan
+        with self.assertRaises(ValueError):
+            u_coord.complete_points_grid(df_missing_lat)
+
+
 
     def test_pts_to_raster_irreg_pass(self):
         """Test pts_to_raster_meta with irregular points"""

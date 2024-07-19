@@ -41,14 +41,15 @@ import pandas as pd
 import xlsxwriter
 from tqdm import tqdm
 import h5py
+from pyproj import CRS as pyprojCRS
+from rasterio.crs import CRS as rasterioCRS  # pylint: disable=no-name-in-module
 
-from climada.entity import Exposures, Tag
-from climada.hazard import Tag as TagHaz
-import climada.util.plot as u_plot
+from climada.entity import Exposures
 from climada import CONFIG
 from climada.util.constants import DEF_CRS, CMAP_IMPACT, DEF_FREQ_UNIT
 import climada.util.coordinates as u_coord
 import climada.util.dates_times as u_dt
+import climada.util.plot as u_plot
 from climada.util.select import get_attributes_with_matching_dimension
 
 LOGGER = logging.getLogger(__name__)
@@ -59,9 +60,6 @@ class Impact():
 
     Attributes
     ----------
-    tag : dict
-        dictionary of tags of exposures, impact functions set and
-        hazard: {'exp': Tag(), 'impf_set': Tag(), 'haz': TagHaz()}
     event_id : np.array
         id (>0) of each hazard event
     event_name : list
@@ -72,6 +70,8 @@ class Impact():
         ordinal 1 (ordinal format of datetime library)
     coord_exp : np.array
         exposures coordinates [lat, lon] (in degrees)
+    crs : str
+        WKT string of the impact's crs
     eai_exp : np.array
         expected impact for each exposure within a period of 1/frequency_unit
     at_event : np.array
@@ -80,8 +80,6 @@ class Impact():
         frequency of event
     frequency_unit : str
         frequency unit used (given by hazard), default is '1/year'
-    tot_value : float
-        total exposure value affected
     aai_agg : float
         average impact within a period of 1/frequency_unit (aggregated)
     unit : str
@@ -89,6 +87,8 @@ class Impact():
     imp_mat : sparse.csr_matrix
         matrix num_events x num_exp with impacts.
         only filled if save_mat is True in calc()
+    haz_type : str
+        the hazard type of the hazard
     """
 
     def __init__(self,
@@ -105,7 +105,7 @@ class Impact():
                  aai_agg=0,
                  unit='',
                  imp_mat=None,
-                 tag=None):
+                 haz_type=''):
         """
         Init Impact object
 
@@ -126,7 +126,8 @@ class Impact():
         coord_exp : np.array, optional
             exposures coordinates [lat, lon] (in degrees)
         crs : Any, optional
-            coordinate reference system
+            Coordinate reference system. CRS instances from ``pyproj`` and ``rasterio``
+            will be transformed into WKT. Other types are not handled explicitly.
         eai_exp : np.array, optional
             expected impact for each exposure within a period of 1/frequency_unit
         at_event : np.array, optional
@@ -139,22 +140,21 @@ class Impact():
             value unit used (given by exposures unit)
         imp_mat : sparse.csr_matrix, optional
             matrix num_events x num_exp with impacts.
-        tag : dict, optional
-            dictionary of tags of exposures, impact functions set and
-            hazard: {'exp': Tag(), 'impf_set': Tag(), 'haz': TagHaz()}
+        haz_type : str, optional
+            the hazard type
         """
 
-        self.tag = tag or {}
+        self.haz_type = haz_type
         self.event_id = np.array([], int) if event_id is None else event_id
         self.event_name = [] if event_name is None else event_name
         self.date = np.array([], int) if date is None else date
         self.coord_exp = np.array([], float) if coord_exp is None else coord_exp
-        self.crs = crs
+        self.crs = crs.to_wkt() if isinstance(crs, (pyprojCRS, rasterioCRS)) else crs
         self.eai_exp = np.array([], float) if eai_exp is None else eai_exp
         self.at_event = np.array([], float) if at_event is None else at_event
         self.frequency = np.array([],float) if frequency is None else frequency
         self.frequency_unit = frequency_unit
-        self.tot_value = tot_value
+        self._tot_value = tot_value
         self.aai_agg = aai_agg
         self.unit = unit
 
@@ -193,14 +193,12 @@ class Impact():
         else:
             self.imp_mat = sparse.csr_matrix(np.empty((0, 0)))
 
-
-
     def calc(self, exposures, impact_funcs, hazard, save_mat=False, assign_centroids=True):
         """This function is deprecated, use ``ImpactCalc.impact`` instead.
         """
         LOGGER.warning("The use of Impact().calc() is deprecated."
                        " Use ImpactCalc().impact() instead.")
-        from climada.engine.impact_calc import ImpactCalc
+        from climada.engine.impact_calc import ImpactCalc  # pylint: disable=import-outside-toplevel
         impcalc = ImpactCalc(exposures, impact_funcs, hazard)
         self.__dict__ = impcalc.impact(
             save_mat=save_mat,
@@ -209,10 +207,12 @@ class Impact():
 
 #TODO: new name
     @classmethod
-    def from_eih(cls, exposures, impfset, hazard,
-                 at_event, eai_exp, aai_agg, imp_mat=None):
+    def from_eih(cls, exposures, hazard, at_event, eai_exp, aai_agg, imp_mat=None):
         """
         Set Impact attributes from precalculated impact metrics.
+
+        .. versionchanged:: 3.3
+           The ``impfset`` argument was removed.
 
         Parameters
         ----------
@@ -248,16 +248,36 @@ class Impact():
                                  axis=1),
             crs = exposures.crs,
             unit = exposures.value_unit,
-            tot_value = exposures.affected_total_value(hazard),
+            tot_value = exposures.centroids_total_value(hazard),
             eai_exp = eai_exp,
             at_event = at_event,
             aai_agg = aai_agg,
             imp_mat = imp_mat if imp_mat is not None else sparse.csr_matrix((0, 0)),
-            tag = {'exp': exposures.tag,
-                   'impf_set': impfset.tag,
-                   'haz': hazard.tag
-                   }
+            haz_type = hazard.haz_type,
             )
+
+    @property
+    def tot_value(self):
+        """Return the total exposure value close to a hazard
+
+        .. deprecated:: 3.3
+           Use :py:meth:`climada.entity.exposures.base.Exposures.affected_total_value`
+           instead.
+        """
+        LOGGER.warning("The Impact.tot_value attribute is deprecated."
+                       "Use Exposures.affected_total_value to calculate the affected "
+                       "total exposure value based on a specific hazard intensity "
+                       "threshold")
+        return self._tot_value
+
+    @tot_value.setter
+    def tot_value(self, value):
+        """Set the total exposure value close to a hazard"""
+        LOGGER.warning("The Impact.tot_value attribute is deprecated."
+                       "Use Exposures.affected_total_value to calculate the affected "
+                       "total exposure value based on a specific hazard intensity "
+                       "threshold")
+        self._tot_value = value
 
     def transfer_risk(self, attachment, cover):
         """Compute the risk transfer for the full portfolio. This is the risk
@@ -392,6 +412,55 @@ class Impact():
             year_set[year] = sum(self.at_event[orig_year == year])
         return year_set
 
+    def impact_at_reg(self, agg_regions=None):
+        """Aggregate impact on given aggregation regions. This method works
+        only if Impact.imp_mat was stored during the impact calculation.
+
+        Parameters
+        ----------
+        agg_regions : np.array, list (optional)
+            The length of the array must equal the number of centroids in exposures.
+            It reports what macro-regions these centroids belong to. For example,
+            asuming there are three centroids and agg_regions = ['A', 'A', 'B']
+            then impact of the first and second centroids will be assigned to
+            region A, whereas impact from the third centroid will be assigned
+            to area B. If no aggregation regions are passed, the method aggregates
+            impact at the country (admin_0) level.
+            Default is None.
+
+        Returns
+        -------
+        pd.DataFrame
+            Contains the aggregated data per event.
+            Rows: Hazard events. Columns: Aggregation regions.
+        """
+        if np.prod(self.imp_mat.shape) == 0:
+            raise ValueError(
+                "The aggregated impact cannot be computed as no Impact.imp_mat was "
+                "stored during the impact calculation"
+            )
+
+        if agg_regions is None:
+            agg_regions = u_coord.country_to_iso(
+                u_coord.get_country_code(self.coord_exp[:, 0], self.coord_exp[:, 1])
+            )
+
+        agg_regions = np.asanyarray(agg_regions)
+        agg_reg_unique = np.unique(agg_regions)
+
+        at_reg_event = np.hstack(
+            [
+                self.imp_mat[:, np.where(agg_regions == reg)[0]].sum(1)
+                for reg in agg_reg_unique
+            ]
+        )
+
+        at_reg_event = pd.DataFrame(
+            at_reg_event, columns=agg_reg_unique, index=self.event_id
+        )
+
+        return at_reg_event
+
     def calc_impact_year_set(self,all_years=True, year_range=None):
         """This function is deprecated, use Impact.impact_per_year instead."""
         LOGGER.warning("The use of Impact.calc_impact_year_set is deprecated."
@@ -463,7 +532,6 @@ class Impact():
             ifc_impact = interp_imp
 
         return ImpactFreqCurve(
-            tag=self.tag,
             return_per=ifc_return_per,
             impact=ifc_impact,
             unit=self.unit,
@@ -605,7 +673,7 @@ class Impact():
 
     def plot_basemap_eai_exposure(self, mask=None, ignore_zero=False, pop_name=True,
                                   buffer=0.0, extend='neither', zoom=10,
-                                  url=ctx.providers.Stamen.Terrain,
+                                  url=ctx.providers.CartoDB.Positron,
                                   axis=None, **kwargs):
         """Plot basemap expected impact of each exposure within a period of 1/frequency_unit.
 
@@ -626,7 +694,7 @@ class Impact():
         zoom : int, optional
             zoom coefficient used in the satellite image
         url : str, optional
-            image source, e.g. ctx.providers.OpenStreetMap.Mapnik
+            image source, default: ctx.providers.CartoDB.Positron
         axis : matplotlib.axes.Axes, optional
             axis to use
         kwargs : dict, optional
@@ -696,7 +764,7 @@ class Impact():
 
     def plot_basemap_impact_exposure(self, event_id=1, mask=None, ignore_zero=False,
                                      pop_name=True, buffer=0.0, extend='neither', zoom=10,
-                                     url=ctx.providers.Stamen.Terrain,
+                                     url=ctx.providers.CartoDB.Positron,
                                      axis=None, **kwargs):
         """Plot basemap impact of an event at each exposure.
         Requires attribute imp_mat.
@@ -721,7 +789,7 @@ class Impact():
         zoom : int, optional
             zoom coefficient used in the satellite image
         url : str, optional
-            image source, e.g. ctx.providers.OpenStreetMap.Mapnik
+            image source, default: ctx.providers.CartoDB.Positron
         axis : matplotlib.axes.Axes, optional
             axis to use
         kwargs : dict, optional
@@ -805,15 +873,11 @@ class Impact():
         LOGGER.info('Writing %s', file_name)
         with open(file_name, "w", encoding='utf-8') as imp_file:
             imp_wr = csv.writer(imp_file)
-            imp_wr.writerow(["tag_hazard", "tag_exposure", "tag_impact_func",
-                             "unit", "tot_value", "aai_agg", "event_id",
+            imp_wr.writerow(["haz_type", "unit", "tot_value", "aai_agg", "event_id",
                              "event_name", "event_date", "event_frequency", "frequency_unit",
                              "at_event", "eai_exp", "exp_lat", "exp_lon", "exp_crs"])
-            csv_data = [[[self.tag['haz'].haz_type], [self.tag['haz'].file_name],
-                         [self.tag['haz'].description]],
-                        [[self.tag['exp'].file_name], [self.tag['exp'].description]],
-                        [[self.tag['impf_set'].file_name], [self.tag['impf_set'].description]],
-                        [self.unit], [self.tot_value], [self.aai_agg],
+            csv_data = [[self.haz_type],
+                        [self.unit], [self._tot_value], [self.aai_agg],
                         self.event_id, self.event_name, self.date,
                         self.frequency, [self.frequency_unit], self.at_event,
                         self.eai_exp, self.coord_exp[:, 0], self.coord_exp[:, 1],
@@ -840,32 +904,26 @@ class Impact():
         imp_wb = xlsxwriter.Workbook(file_name)
         imp_ws = imp_wb.add_worksheet()
 
-        header = ["tag_hazard", "tag_exposure", "tag_impact_func",
-                  "unit", "tot_value", "aai_agg", "event_id",
+        header = ["haz_type", "unit", "tot_value", "aai_agg", "event_id",
                   "event_name", "event_date", "event_frequency", "frequency_unit",
                   "at_event", "eai_exp", "exp_lat", "exp_lon", "exp_crs"]
         for icol, head_dat in enumerate(header):
             imp_ws.write(0, icol, head_dat)
-        data = [self.tag['haz'].haz_type, str(self.tag['haz'].file_name),
-                str(self.tag['haz'].description)]
+        data = [str(self.haz_type)]
         write_col(0, imp_ws, data)
-        data = [str(self.tag['exp'].file_name), str(self.tag['exp'].description)]
-        write_col(1, imp_ws, data)
-        data = [str(self.tag['impf_set'].file_name), str(self.tag['impf_set'].description)]
-        write_col(2, imp_ws, data)
-        write_col(3, imp_ws, [self.unit])
-        write_col(4, imp_ws, [self.tot_value])
-        write_col(5, imp_ws, [self.aai_agg])
-        write_col(6, imp_ws, self.event_id)
-        write_col(7, imp_ws, self.event_name)
-        write_col(8, imp_ws, self.date)
-        write_col(9, imp_ws, self.frequency)
-        write_col(10, imp_ws, [self.frequency_unit])
-        write_col(11, imp_ws, self.at_event)
-        write_col(12, imp_ws, self.eai_exp)
-        write_col(13, imp_ws, self.coord_exp[:, 0])
-        write_col(14, imp_ws, self.coord_exp[:, 1])
-        write_col(15, imp_ws, [str(self.crs)])
+        write_col(1, imp_ws, [self.unit])
+        write_col(2, imp_ws, [self._tot_value])
+        write_col(3, imp_ws, [self.aai_agg])
+        write_col(4, imp_ws, self.event_id)
+        write_col(5, imp_ws, self.event_name)
+        write_col(6, imp_ws, self.date)
+        write_col(7, imp_ws, self.frequency)
+        write_col(8, imp_ws, [self.frequency_unit])
+        write_col(9, imp_ws, self.at_event)
+        write_col(10, imp_ws, self.eai_exp)
+        write_col(11, imp_ws, self.coord_exp[:, 0])
+        write_col(12, imp_ws, self.coord_exp[:, 1])
+        write_col(13, imp_ws, [str(self.crs)])
 
         imp_wb.close()
 
@@ -879,11 +937,6 @@ class Impact():
 
         The impact matrix can be stored in a sparse or dense format.
 
-        Notes
-        -----
-        This writer does not support attributes with variable types. Please make sure
-        that ``event_name`` is a list of equally-typed values, e.g., all ``str``.
-
         Parameters
         ----------
         file_path : str or Path
@@ -892,6 +945,11 @@ class Impact():
             If ``True``, write the impact matrix as dense matrix that can be more easily
             interpreted by common H5 file readers but takes up (vastly) more space.
             Defaults to ``False``.
+
+        Raises
+        ------
+        TypeError
+            If :py:attr:`event_name` does not contain strings exclusively.
         """
         # Define writers for all types (will be filled later)
         type_writers = dict()
@@ -925,7 +983,7 @@ class Impact():
 
         def _str_type_helper(values: Collection):
             """Return string datatype if we assume 'values' contains strings"""
-            if isinstance(next(iter(values)), str):
+            if all((isinstance(val, str) for val in values)):
                 return h5py.string_dtype()
             return None
 
@@ -942,10 +1000,6 @@ class Impact():
             group = group.create_group(name)
             for key, val in value.items():
                 write(group, key, val)
-
-        def write_tag(group, name, value):
-            """Write a tag object using the dict writer"""
-            write_dict(group, name, value.__dict__)
 
         def _write_csr_dense(group, name, value):
             """Write a CSR Matrix in dense format"""
@@ -971,8 +1025,6 @@ class Impact():
         #       2) Anything is 'object', so this serves as fallback/default.
         type_writers = {
             str: write_attribute,
-            Tag: write_tag,
-            TagHaz: write_tag,
             dict: write_dict,
             sparse.csr_matrix: write_csr,
             Collection: write_dataset,
@@ -983,8 +1035,11 @@ class Impact():
         with h5py.File(file_path, "w") as file:
 
             # Now write all attributes
+            # NOTE: Remove leading underscore to write '_tot_value' as regular attribute
             for name, value in self.__dict__.items():
-                write(file, name, value)
+                if name == "event_name" and _str_type_helper(value) is None:
+                    raise TypeError("'event_name' must be a list of strings")
+                write(file, name.lstrip("_"), value)
 
     def write_sparse_csr(self, file_name):
         """Write imp_mat matrix in numpy's npz format."""
@@ -1026,7 +1081,7 @@ class Impact():
         # pylint: disable=no-member
         LOGGER.info('Reading %s', file_name)
         imp_df = pd.read_csv(file_name)
-        imp = cls()
+        imp = cls(haz_type=imp_df.haz_type[0])
         imp.unit = imp_df.unit[0]
         imp.tot_value = imp_df.tot_value[0]
         imp.aai_agg = imp_df.aai_agg[0]
@@ -1047,13 +1102,7 @@ class Impact():
             imp.crs = u_coord.to_crs_user_input(imp_df.exp_crs.values[0])
         except AttributeError:
             imp.crs = DEF_CRS
-        imp.tag['haz'] = TagHaz(str(imp_df.tag_hazard[0]),
-                                 str(imp_df.tag_hazard[1]),
-                                 str(imp_df.tag_hazard[2]))
-        imp.tag['exp'] = Tag(str(imp_df.tag_exposure[0]),
-                              str(imp_df.tag_exposure[1]))
-        imp.tag['impf_set'] = Tag(str(imp_df.tag_impact_func[0]),
-                                 str(imp_df.tag_impact_func[1]))
+
         return imp
 
     def read_csv(self, *args, **kwargs):
@@ -1078,17 +1127,7 @@ class Impact():
         """
         LOGGER.info('Reading %s', file_name)
         dfr = pd.read_excel(file_name)
-        imp =cls()
-        imp.tag['haz'] = TagHaz(
-            haz_type = dfr['tag_hazard'][0],
-            file_name = dfr['tag_hazard'][1],
-            description = dfr['tag_hazard'][2])
-        imp.tag['exp'] = Tag()
-        imp.tag['exp'].file_name = dfr['tag_exposure'][0]
-        imp.tag['exp'].description = dfr['tag_exposure'][1]
-        imp.tag['impf_set'] = Tag()
-        imp.tag['impf_set'].file_name = dfr['tag_impact_func'][0]
-        imp.tag['impf_set'].description = dfr['tag_impact_func'][1]
+        imp = cls(haz_type=str(dfr['haz_type'][0]))
 
         imp.unit = dfr.unit[0]
         imp.tot_value = dfr.tot_value[0]
@@ -1136,24 +1175,11 @@ class Impact():
             ├─ event_name
             ├─ frequency
             ├─ imp_mat
-            ├─ tag/
-            │  ├─ exp/
-            │  │  ├─ .attrs/
-            │  │  │  ├─ file_name
-            │  │  │  ├─ description
-            │  ├─ haz/
-            │  │  ├─ .attrs/
-            │  │  │  ├─ haz_type
-            │  │  │  ├─ file_name
-            │  │  │  ├─ description
-            │  ├─ impf_set/
-            │  │  ├─ .attrs/
-            │  │  │  ├─ file_name
-            │  │  │  ├─ description
             ├─ .attrs/
             │  ├─ aai_agg
             │  ├─ crs
             │  ├─ frequency_unit
+            │  ├─ haz_type
             │  ├─ tot_value
             │  ├─ unit
 
@@ -1204,7 +1230,7 @@ class Impact():
 
             # Scalar attributes
             scalar_attrs = set(
-                ("crs", "tot_value", "unit", "aai_agg", "frequency_unit")
+                ("crs", "tot_value", "unit", "aai_agg", "frequency_unit", "haz_type")
             ).intersection(file.attrs.keys())
             kwargs.update({attr: file.attrs[attr] for attr in scalar_attrs})
 
@@ -1216,22 +1242,18 @@ class Impact():
             ).intersection(file.keys())
             kwargs.update({attr: file[attr][:] for attr in array_attrs})
 
-            # Special handling for 'event_name' because it's a list of strings
+            # Special handling for 'event_name' because it should be a list of strings
             if "event_name" in file:
                 # pylint: disable=no-member
-                kwargs["event_name"] = list(file["event_name"].asstr()[:])
-
-            # Tags
-            if "tag" in file:
-                tag_kwargs = dict()
-                tag_group = file["tag"]
-                subtags = set(("exp", "impf_set")).intersection(tag_group.keys())
-                tag_kwargs.update({st: Tag(**tag_group[st].attrs) for st in subtags})
-
-                # Special handling for hazard because it has another tag type
-                if "haz" in tag_group:
-                    tag_kwargs["haz"] = TagHaz(**tag_group["haz"].attrs)
-                kwargs["tag"] = tag_kwargs
+                try:
+                    event_name = file["event_name"].asstr()[:]
+                except TypeError:
+                    LOGGER.warning(
+                        "'event_name' is not stored as strings. Trying to decode "
+                        "values with 'str()' instead."
+                    )
+                    event_name = map(str, file["event_name"][:])
+                kwargs["event_name"] = list(event_name)
 
         # Create the impact object
         return cls(**kwargs)
@@ -1277,6 +1299,8 @@ class Impact():
         -------
         list of Impact
         """
+        from climada.engine.impact_calc import ImpactCalc  # pylint: disable=import-outside-toplevel
+
         if args_exp is None:
             args_exp = dict()
         if args_imp is None:
@@ -1287,8 +1311,7 @@ class Impact():
         # assign centroids once for all
         exp.assign_centroids(haz_list[0])
         for i_time, _ in enumerate(haz_list):
-            imp_tmp = Impact()
-            imp_tmp.calc(exp, impf_set, haz_list[i_time], assign_centroids=False)
+            imp_tmp = ImpactCalc(exp, impf_set, haz_list[i_time]).impact(assign_centroids=False)
             imp_arr = np.maximum(imp_arr, imp_tmp.eai_exp)
             # remove not impacted exposures
             save_exp = imp_arr > imp_thresh
@@ -1401,7 +1424,6 @@ class Impact():
             crs=self.crs,
             value_unit=self.unit,
             ref_year=0,
-            tag=Tag(),
             meta=None
         )
 
@@ -1423,7 +1445,6 @@ class Impact():
             crs=self.crs,
             value_unit=self.unit,
             ref_year=0,
-            tag=Tag(),
             meta=None
         )
 
@@ -1464,9 +1485,14 @@ class Impact():
 
         return imp_fit
 
-    def select(self,
-               event_ids=None, event_names=None, dates=None,
-               coord_exp=None):
+    def select(
+        self,
+        event_ids=None,
+        event_names=None,
+        dates=None,
+        coord_exp=None,
+        reset_frequency=False
+    ):
         """
         Select a subset of events and/or exposure points from the impact.
         If multiple input variables are not None, it returns all the impacts
@@ -1498,6 +1524,9 @@ class Impact():
         coord_exp : np.array, optional
             Selection of exposures coordinates [lat, lon] (in degrees)
             The default is None.
+        reset_frequency : bool, optional
+            Change frequency of events proportional to difference between first and last
+            year (old and new). Assumes annual frequency values. Default: False.
 
         Raises
         ------
@@ -1569,6 +1598,19 @@ class Impact():
             LOGGER.info("The total value cannot be re-computed for a "
                         "subset of exposures and is set to None.")
 
+        # reset frequency if date span has changed (optional):
+        if reset_frequency:
+            if self.frequency_unit not in ['1/year', 'annual', '1/y', '1/a']:
+                LOGGER.warning("Resetting the frequency is based on the calendar year of given"
+                    " dates but the frequency unit here is %s. Consider setting the frequency"
+                    " manually for the selection or changing the frequency unit to %s.",
+                    self.frequency_unit, DEF_FREQ_UNIT)
+            year_span_old = np.abs(dt.datetime.fromordinal(self.date.max()).year -
+                                   dt.datetime.fromordinal(self.date.min()).year) + 1
+            year_span_new = np.abs(dt.datetime.fromordinal(imp.date.max()).year -
+                                   dt.datetime.fromordinal(imp.date.min()).year) + 1
+            imp.frequency = imp.frequency * year_span_old / year_span_new
+
         # cast frequency vector into 2d array for sparse matrix multiplication
         freq_mat = imp.frequency.reshape(len(imp.frequency), 1)
         # .A1 reduce 1d matrix to 1d array
@@ -1625,7 +1667,7 @@ class Impact():
         return sel_ev
 
     def _selected_exposures_idx(self, coord_exp):
-        assigned_idx = u_coord.assign_coordinates(self.coord_exp, coord_exp, threshold=0)
+        assigned_idx = u_coord.match_coordinates(self.coord_exp, coord_exp, threshold=0)
         sel_exp = (assigned_idx >= 0).nonzero()[0]
         if sel_exp.size == 0:
             LOGGER.warning("No exposure coordinates match the selection.")
@@ -1644,8 +1686,8 @@ class Impact():
           ``frequency``, ``imp_mat``, ``at_event``,
         - sums up the values of attributes ``eai_exp``, ``aai_exp``
         - and takes the following attributes from the first impact object in the passed
-          impact list: ``coord_exp``, ``crs``, ``unit``, ``tot_value``, ``tag``,
-          ``frequency_unit``
+          impact list: ``coord_exp``, ``crs``, ``unit``, ``tot_value``,
+          ``frequency_unit``, ``haz_type``
 
         If event ids are not unique among the passed impact objects an error is raised.
         In this case, the user can set ``reset_event_ids=True`` to create unique event ids
@@ -1731,25 +1773,53 @@ class Impact():
             eai_exp=np.nansum([imp.eai_exp for imp in imp_list], axis=0),
             aai_agg=np.nansum([imp.aai_agg for imp in imp_list]),
             imp_mat=imp_mat,
-            tag=first_imp.tag,
+            haz_type=first_imp.haz_type,
             frequency_unit=first_imp.frequency_unit,
             **kwargs,
         )
 
+    def match_centroids(self, hazard, distance='euclidean',
+                        threshold=u_coord.NEAREST_NEIGHBOR_THRESHOLD):
+        """
+        Finds the closest hazard centroid for each impact coordinate.
+        Creates a temporary GeoDataFrame and uses ``u_coord.match_centroids()``.
+        See there for details and parameters
+
+        Parameters
+        ----------
+        hazard : Hazard
+            Hazard to match (with raster or vector centroids).
+        distance : str, optional
+            Distance to use in case of vector centroids.
+            Possible values are "euclidean", "haversine" and "approx".
+            Default: "euclidean"
+        threshold : float
+            If the distance (in km) to the nearest neighbor exceeds `threshold`,
+            the index `-1` is assigned.
+            Set `threshold` to 0, to disable nearest neighbor matching.
+            Default: 100 (km)
+
+        Returns
+        -------
+        np.array
+            array of closest Hazard centroids, aligned with the Impact's `coord_exp` array
+        """
+
+        return u_coord.match_centroids(
+            self._build_exp().gdf,
+            hazard.centroids,
+            distance=distance,
+            threshold=threshold)
 
 @dataclass
 class ImpactFreqCurve():
     """Impact exceedence frequency curve.
     """
 
-    tag : dict = field(default_factory=dict)
-    """dictionary of tags of exposures, impact functions set and
-        hazard: {'exp': Tag(), 'impf_set': Tag(), 'haz': TagHaz()}"""
-
-    return_per : np.array = np.array([])
+    return_per : np.ndarray = field(default_factory=lambda: np.empty(0))
     """return period"""
 
-    impact : np.array = np.array([])
+    impact : np.ndarray = field(default_factory=lambda: np.empty(0))
     """impact exceeding frequency"""
 
     unit : str = ''

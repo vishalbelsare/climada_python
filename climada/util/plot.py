@@ -36,6 +36,7 @@ from scipy.interpolate import griddata
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+from matplotlib import colormaps as cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from shapely.geometry import box
 import cartopy.crs as ccrs
@@ -43,6 +44,7 @@ from cartopy.io import shapereader
 from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
 from rasterio.crs import CRS
 import requests
+import geopandas as gpd
 
 from climada.util.constants import CMAP_EXPOSURES, CMAP_CAT, CMAP_RASTER
 from climada.util.files_handler import to_list
@@ -251,7 +253,7 @@ def _plot_scattered_data(method, array_sub, geo_coord, var_name, title,
 
 
 def geo_im_from_array(array_sub, coord, var_name, title,
-                      proj=None, smooth=True, axes=None, figsize=(9, 13), adapt_fontsize=True,
+                      proj=None, smooth=True, shapes=True, axes=None, figsize=(9, 13), adapt_fontsize=True,
                       **kwargs):
     """Image(s) plot defined in array(s) over input coordinates.
 
@@ -272,6 +274,9 @@ def geo_im_from_array(array_sub, coord, var_name, title,
         coordinate reference system used in coordinates, by default None
     smooth : bool, optional
         smooth plot to RESOLUTIONxRESOLUTION, by default True
+    shapes : bool, optional
+        Overlay Earth's countries coastlines to matplotlib.pyplot axis.
+        The default is True
     axes : Axes or ndarray(Axes), optional
         by default None
     figsize : tuple, optional
@@ -311,7 +316,7 @@ def geo_im_from_array(array_sub, coord, var_name, title,
     if axes is None:
         proj_plot = proj
         if isinstance(proj, ccrs.PlateCarree):
-            # for PlateCarree, center plot around data's central lon 
+            # for PlateCarree, center plot around data's central lon
             # without overwriting the data's original projection info
             xmin, xmax = u_coord.lon_bounds(np.concatenate([c[:, 1] for c in list_coord]))
             proj_plot = ccrs.PlateCarree(central_longitude=0.5 * (xmin + xmax))
@@ -349,7 +354,8 @@ def geo_im_from_array(array_sub, coord, var_name, title,
                          extent[2], extent[3]), crs=proj)
 
         # Add coastline to axis
-        add_shapes(axis)
+        if shapes:
+            add_shapes(axis)
         # Create colormesh, colorbar and labels in axis
         cbax = make_axes_locatable(axis).append_axes('right', size="6.5%",
                                                      pad=0.1, axes_class=plt.Axes)
@@ -436,10 +442,10 @@ def geo_scatter_categorical(array_sub, geo_coord, var_name, title,
             if cmap_name in ['Pastel1', 'Pastel2', 'Paired', 'Accent', 'Dark2',
                     'Set1', 'Set2', 'Set3', 'tab10', 'tab20', 'tab20b', 'tab20c']:
                 cmap = mpl.colors.ListedColormap(
-                    mpl.cm.get_cmap(cmap_name).colors[:array_sub_n]
+                    cm.get_cmap(cmap_name).colors[:array_sub_n]
                 )
             else:
-                cmap = mpl.cm.get_cmap(cmap_arg, array_sub_n)
+                cmap = cm.get_cmap(cmap_arg).resampled(array_sub_n)
         elif isinstance(cmap_arg, mpl.colors.ListedColormap):
             # If a user brings their own colormap it's probably qualitative
             cmap_name = 'defined by the user'
@@ -452,7 +458,7 @@ def geo_scatter_categorical(array_sub, geo_coord, var_name, title,
         # default qualitative colormap
         cmap_name = CMAP_CAT
         cmap = mpl.colors.ListedColormap(
-            mpl.cm.get_cmap(cmap_name).colors[:array_sub_n]
+            cm.get_cmap(cmap_name).colors[:array_sub_n]
         )
 
     if array_sub_n > cmap.N:
@@ -511,7 +517,7 @@ def make_map(num_sub=1, figsize=(9, 13), proj=ccrs.PlateCarree(), adapt_fontsize
 
     Returns
     -------
-    fig, axis_sub : matplotlib.figure.Figure, cartopy.mpl.geoaxes.GeoAxesSubplot
+    fig, axis_sub, fontsize : matplotlib.figure.Figure, cartopy.mpl.geoaxes.GeoAxesSubplot, int
     """
     if isinstance(num_sub, int):
         num_row, num_col = _get_row_col_size(num_sub)
@@ -869,3 +875,80 @@ def multibar_plot(ax, data, colors=None, total_width=0.8, single_width=1,
     # Draw legend if we need
     if legend:
         ax.legend(bars, data.keys())
+
+def subplots_from_gdf(
+        gdf: gpd.GeoDataFrame,
+        colorbar_name: str = None,
+        title_subplots: callable = None,
+        smooth=True,
+        axis=None,
+        figsize=(9, 13),
+        adapt_fontsize=True,
+        **kwargs
+):
+    """Plot several subplots from different columns of a GeoDataFrame, e.g., for 
+    plotting local return periods or local exceedance intensities.
+
+    Parameters
+    ----------
+    gdf: gpd.GeoDataFrame
+        return periods per threshold intensity
+    colorbar_name: str
+        title of the subplots' colorbars
+    title_subplots: function
+        function that generates the titles of the different subplots using the columns' names
+    smooth: bool, optional
+        Smooth plot to plot.RESOLUTION x plot.RESOLUTION. Default is True
+    axis: matplotlib.axes._subplots.AxesSubplot, optional
+        Axis to use. Default is None
+    figsize: tuple, optional
+        Figure size for plt.subplots. Default is (9, 13)
+    adapt_fontsize: bool, optional
+        If set to true, the size of the fonts will be adapted to the size of the figure.
+        Otherwise the default matplotlib font size is used. Default is True.
+    kwargs: optional
+        Arguments for pcolormesh matplotlib function used in event plots.
+
+    Returns
+    -------
+    axis: matplotlib.axes._subplots.AxesSubplot
+        Matplotlib axis with the plot.
+    """
+    # check if inputs are correct types
+    if not isinstance(gdf, gpd.GeoDataFrame):
+        raise ValueError("gdf is not a GeoDataFrame")
+    gdf = gdf[['geometry', *[col for col in gdf.columns if col != 'geometry']]]
+
+    # read meta data for fig and axis labels
+    if not isinstance(colorbar_name, str):
+        print("Unknown colorbar name. Colorbar label will be missing.")
+        colorbar_name = ''
+    if not callable(title_subplots):
+        print("Unknown subplot-title-generation function. Subplot titles will be column names.")
+        title_subplots = lambda cols: [f"{col}" for col in cols]
+
+    # change default plot kwargs if plotting return periods
+    if colorbar_name.strip().startswith('Return Period'):
+        if 'cmap' not in kwargs.keys():
+            kwargs.update({'cmap': 'viridis_r'})
+        if 'norm' not in kwargs.keys():
+            kwargs.update(
+                {'norm': mpl.colors.LogNorm(
+                    vmin=gdf.values[:,1:].min(), vmax=gdf.values[:,1:].max()
+                    ),
+                'vmin': None, 'vmax': None}
+            )
+
+    axis = geo_im_from_array(
+        gdf.values[:,1:].T,
+        gdf.geometry.get_coordinates().values[:,::-1],
+        colorbar_name,
+        title_subplots(gdf.columns[1:]),
+        smooth=smooth,
+        axes=axis,
+        figsize=figsize,
+        adapt_fontsize=adapt_fontsize,
+        **kwargs
+    )
+
+    return axis

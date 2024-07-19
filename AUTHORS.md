@@ -28,3 +28,11 @@
 * Lukas Riedel
 * Raphael Portmann
 * Nicolas Colombi
+* Leonie Villiger
+* Timo Schmid
+* Kam Lam Yeung
+* Sarah Hülsen
+* Timo Schmid
+* Luca Severino
+* Samuel Juhel
+* Valentin Gebhart

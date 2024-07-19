@@ -2,7 +2,7 @@
 """
 
 from pathlib import Path
-from setuptools import find_packages, setup
+from setuptools import setup, find_namespace_packages
 
 here = Path(__file__).parent.absolute()
 
@@ -10,10 +10,30 @@ here = Path(__file__).parent.absolute()
 with open(here.joinpath('README.md'), encoding='utf-8') as f:
     long_description = f.read()
 
+# Requirements for documentation
+DEPS_DOC = [
+    "ipython",
+    "myst-nb",
+    "readthedocs-sphinx-ext>=2.2",
+    "sphinx",
+    "sphinx-book-theme",
+    "sphinx-markdown-tables",
+]
+
+# Requirements for testing
+DEPS_TEST = [
+    "ipython",
+    "mccabe>=0.6",
+    "pylint==2.7.1",
+    "pytest",
+    "pytest-cov",
+    "pytest-subtests",
+]
+
 setup(
     name='climada',
 
-    version='3.3.2',
+    version='5.0.0',
 
     description='CLIMADA in Python',
 
@@ -28,9 +48,6 @@ setup(
     license='OSI Approved :: GNU Lesser General Public License v3 (GPLv3)',
 
     classifiers=[
-        #   3 - Alpha
-        #   4 - Beta
-        #   5 - Production/Stable
         'Development Status :: 4 - Beta',
         'Programming Language :: Python :: 3.9',
         'Topic :: Scientific/Engineering :: Atmospheric Science',
@@ -40,9 +57,10 @@ setup(
 
     keywords='climate adaptation',
 
-    packages=find_packages() + ['data'],
+    python_requires=">=3.9,<3.12",
 
     install_requires=[
+        'bayesian-optimization',
         'bottleneck',
         'cartopy',
         'cfgrib',
@@ -55,6 +73,7 @@ setup(
         'matplotlib',
         'netcdf4',
         'numba',
+        'openpyxl',
         'overpy',
         'pandas',
         'pandas-datareader',
@@ -63,9 +82,11 @@ setup(
         'pillow',
         'pint',
         'pycountry',
+        'pyproj',
         'rasterio',
         'salib',
         'scikit-learn',
+        'seaborn',
         'statsmodels',
         'sparse',
         'tables',
@@ -77,5 +98,14 @@ setup(
         'xmlrunner'
     ],
 
-    include_package_data=True
+    extras_require={
+        "doc": DEPS_DOC,
+        "test": DEPS_TEST,
+        "dev": DEPS_DOC + DEPS_TEST
+    },
+
+    packages=find_namespace_packages(include=['climada*']),
+
+    setup_requires=['setuptools_scm'],
+    include_package_data=True,
 )

@@ -25,9 +25,10 @@ import numpy as np
 import numpy.testing as npt
 from scipy import sparse
 import h5py
+from pyproj import CRS
+from rasterio.crs import CRS as rCRS
+import datetime as dt
 
-from climada.entity.tag import Tag
-from climada.hazard.tag import Tag as TagHaz
 from climada.entity.entity_def import Entity
 from climada.hazard.base import Hazard
 from climada.engine import Impact, ImpactCalc
@@ -42,6 +43,8 @@ HAZ :Hazard = Hazard.from_hdf5(HAZ_TEST_TC)
 
 DATA_FOLDER :Path = DEMO_DIR / 'test-results'
 DATA_FOLDER.mkdir(exist_ok=True)
+
+STR_DT = h5py.special_dtype(vlen=str)
 
 
 def dummy_impact():
@@ -62,12 +65,26 @@ def dummy_impact():
         imp_mat=sparse.csr_matrix(
             np.array([[0, 0], [1, 1], [2, 2], [3, 3], [30, 30], [31, 31]])
         ),
-        tag={
-            "exp": Tag("file_exp.p", "descr exp"),
-            "haz": TagHaz("TC", "file_haz.p", "descr haz"),
-            "impf_set": Tag(),
-        },
+        haz_type="TC",
     )
+
+def dummy_impact_yearly():
+    """Return an impact containing events in multiple years"""
+    imp = dummy_impact()
+
+    years = np.arange(2010,2010+len(imp.date))
+
+    # Edit the date and frequency
+    imp.date = np.array([dt.date(year,1,1).toordinal() for year in years])
+    imp.frequency_unit = "1/year"
+    imp.frequency = np.ones(len(years))/len(years)
+
+    # Calculate the correct expected annual impact
+    freq_mat = imp.frequency.reshape(len(imp.frequency), 1)
+    imp.eai_exp = imp.imp_mat.multiply(freq_mat).sum(axis=0).A1
+    imp.aai_agg = imp.eai_exp.sum()
+
+    return imp
 
 
 class TestImpact(unittest.TestCase):
@@ -79,8 +96,7 @@ class TestImpact(unittest.TestCase):
         fake_eai_exp = np.arange(len(exp.gdf))
         fake_at_event = np.arange(HAZ.size)
         fake_aai_agg = np.sum(fake_eai_exp)
-        imp = Impact.from_eih(exp, ENT.impact_funcs, HAZ,
-                              fake_at_event, fake_eai_exp, fake_aai_agg)
+        imp = Impact.from_eih(exp, HAZ, fake_at_event, fake_eai_exp, fake_aai_agg)
         self.assertEqual(imp.crs, exp.crs)
         self.assertEqual(imp.aai_agg, fake_aai_agg)
         self.assertEqual(imp.imp_mat.size, 0)
@@ -98,6 +114,17 @@ class TestImpact(unittest.TestCase):
             np.stack([exp.gdf.latitude.values, exp.gdf.longitude.values], axis=1)
             )
 
+    def test_pyproj_crs(self):
+        """Check if initializing with a pyproj.CRS transforms it into a string"""
+        crs = CRS.from_epsg(4326)
+        impact = Impact(crs=crs)
+        self.assertEqual(impact.crs, crs.to_wkt())
+
+    def test_rasterio_crs(self):
+        """Check if initializing with a rasterio.crs.CRS transforms it into a string"""
+        crs = rCRS.from_epsg(4326)
+        impact = Impact(crs=crs)
+        self.assertEqual(impact.crs, crs.to_wkt())
 
 class TestImpactConcat(unittest.TestCase):
     """test Impact.concat"""
@@ -354,10 +381,7 @@ class TestIO(unittest.TestCase):
         # Create impact object
         num_ev = 10
         num_exp = 5
-        imp_write = Impact()
-        imp_write.tag = {'exp': Tag('file_exp.p', 'descr exp'),
-                         'haz': TagHaz('TC', 'file_haz.p', 'descr haz'),
-                         'impf_set': Tag()}
+        imp_write = Impact(haz_type='TC')
         imp_write.event_id = np.arange(num_ev)
         imp_write.event_name = ['event_' + str(num) for num in imp_write.event_id]
         imp_write.date = np.ones(num_ev)
@@ -394,10 +418,7 @@ class TestIO(unittest.TestCase):
         # Create impact object
         num_ev = 5
         num_exp = 10
-        imp_write = Impact()
-        imp_write.tag = {'exp': Tag('file_exp.p', 'descr exp'),
-                         'haz': TagHaz('TC', 'file_haz.p', 'descr haz'),
-                         'impf_set': Tag()}
+        imp_write = Impact(haz_type='TC')
         imp_write.event_id = np.arange(num_ev)
         imp_write.event_name = ['event_' + str(num) for num in imp_write.event_id]
         imp_write.date = np.ones(num_ev)
@@ -495,6 +516,82 @@ class TestRPmatrix(unittest.TestCase):
         self.assertEqual(impact_rp.size, 2 * ent.exposures.gdf.value.size)
         self.assertAlmostEqual(np.max(impact_rp), 2916964966.388219, places=5)
         self.assertAlmostEqual(np.min(impact_rp), 444457580.131494, places=5)
+
+
+class TestImpactReg(unittest.TestCase):
+    """Test impact aggregation per aggregation region or admin 0"""
+
+    def setUp(self):
+        """Build the impact object for testing"""
+        self.imp = dummy_impact()
+
+    def test_agg_regions(self):
+        """Test calc local impacts per region"""
+        # Aggregate over a single region
+        region_ids = ["A", "A"]
+        at_reg_event = self.imp.impact_at_reg(region_ids)
+
+        self.assertEqual(at_reg_event.sum().sum(), self.imp.at_event.sum())
+        self.assertEqual(at_reg_event.shape[0], self.imp.at_event.shape[0])
+        self.assertEqual(at_reg_event.shape[1], np.unique(region_ids).shape[0])
+
+        # Aggregate over two different regions
+        region_ids = ["A", "B"]
+        at_reg_event = self.imp.impact_at_reg(region_ids)
+
+        self.assertEqual(at_reg_event["A"].sum(), self.imp.imp_mat[:, 0].sum())
+        self.assertEqual(at_reg_event["B"].sum(), self.imp.imp_mat[:, 1].sum())
+
+        self.assertEqual(at_reg_event.sum().sum(), self.imp.at_event.sum())
+        self.assertEqual(at_reg_event.shape[0], self.imp.at_event.shape[0])
+        self.assertEqual(at_reg_event.shape[1], np.unique(region_ids).shape[0])
+
+    def test_admin0(self):
+        """Test with aggregation to countries"""
+        # Let's specify sample cities' coords
+        zurich_lat, zurich_lon = 47.37, 8.55
+        bern_lat, bern_lon = 46.94, 7.44
+        rome_lat, rome_lon = 41.89, 12.51
+
+        # Test admin 0 with one country
+        self.imp.coord_exp = np.array([[zurich_lat, zurich_lon], [bern_lat, bern_lon]])
+
+        at_reg_event = self.imp.impact_at_reg()
+
+        self.assertEqual(len(at_reg_event.columns), 1)
+        self.assertEqual(at_reg_event.columns[0], "CHE")
+
+        self.assertEqual(at_reg_event.shape[0], self.imp.at_event.shape[0])
+        self.assertEqual(
+            at_reg_event["CHE"].sum(), at_reg_event.sum().sum(), self.imp.at_event.sum()
+        )
+
+        # Test admin 0 with two countries
+        self.imp.coord_exp = np.array([[rome_lat, rome_lon], [bern_lat, bern_lon]])
+        at_reg_event = self.imp.impact_at_reg()
+
+        self.assertEqual(len(at_reg_event.columns), 2)
+        self.assertEqual(at_reg_event.columns[0], "CHE")
+        self.assertEqual(at_reg_event.columns[1], "ITA")
+
+        self.assertEqual(at_reg_event.shape[0], self.imp.at_event.shape[0])
+        self.assertEqual(at_reg_event["CHE"].sum(), self.imp.imp_mat[:, 0].sum())
+        self.assertEqual(at_reg_event["ITA"].sum(), self.imp.imp_mat[:, 1].sum())
+        self.assertEqual(at_reg_event.sum().sum(), self.imp.at_event.sum())
+
+    def test_no_imp_mat(self):
+        """Check error if no impact matrix is stored"""
+        # A matrix with only zeros should work!
+        self.imp.imp_mat = sparse.csr_matrix(np.zeros_like(self.imp.imp_mat.toarray()))
+        at_reg = self.imp.impact_at_reg(["A", "A"])
+        self.assertEqual(at_reg["A"].sum(), 0)
+
+        # An empty matrix should not work
+        self.imp.imp_mat = sparse.csr_matrix((0, 0))
+        with self.assertRaises(ValueError) as cm:
+            self.imp.impact_at_reg()
+        self.assertIn("no Impact.imp_mat was stored", str(cm.exception))
+
 
 class TestRiskTrans(unittest.TestCase):
     """Test risk transfer methods"""
@@ -682,7 +779,8 @@ class TestSelect(unittest.TestCase):
         ent.exposures.assign_centroids(hazard)
 
         # Compute the impact over the whole exposures
-        imp = ImpactCalc(ent.exposures, ent.impact_funcs, hazard).impact(save_mat=True, assign_centroids=False)
+        imp = ImpactCalc(ent.exposures, ent.impact_funcs, hazard).impact(
+            save_mat=True, assign_centroids=False)
 
         sel_imp = imp.select(event_ids=imp.event_id,
                              event_names=imp.event_name,
@@ -790,6 +888,22 @@ class TestSelect(unittest.TestCase):
         with self.assertRaises(ValueError):
             imp.select(event_ids=[0], event_names=[1, 'two'], dates=(0, 2))
 
+    def test_select_reset_frequency(self):
+        """Test that reset_frequency option works correctly"""
+
+        imp = dummy_impact_yearly() # 6 events, 1 per year
+
+        # select first 4 events
+        n_yr = 4
+        sel_imp = imp.select(dates=(imp.date[0],imp.date[n_yr-1]), reset_frequency=True)
+
+        # check frequency-related attributes
+        np.testing.assert_array_equal(sel_imp.frequency, [1/n_yr]*n_yr)
+        self.assertEqual(sel_imp.aai_agg,imp.at_event[0:n_yr].sum()/n_yr)
+        np.testing.assert_array_equal(sel_imp.eai_exp,
+                                      imp.imp_mat[0:n_yr,:].todense().sum(axis=0).A1/n_yr)
+
+
 class TestConvertExp(unittest.TestCase):
     def test__build_exp(self):
         """Test that an impact set can be converted to an exposure"""
@@ -816,6 +930,19 @@ class TestConvertExp(unittest.TestCase):
         self.assertEqual(exp.value_unit, imp.unit)
         self.assertEqual(exp.ref_year, 0)
 
+class TestMatchCentroids(unittest.TestCase):
+
+    def test_match_centroids(self):
+        "Test that hazard centroids get assigned correctly"
+        exp = ENT.exposures
+        exp.assign_centroids(HAZ)
+        fake_eai_exp = np.arange(len(exp.gdf))
+        fake_at_event = np.arange(HAZ.size)
+        fake_aai_agg = np.sum(fake_eai_exp)
+        imp = Impact.from_eih(exp, HAZ, fake_at_event, fake_eai_exp, fake_aai_agg)
+        imp_centr = imp.match_centroids(HAZ)
+        np.testing.assert_array_equal(imp_centr, exp.gdf.centr_TC)
+
 
 class TestImpactH5IO(unittest.TestCase):
     """Tests for reading and writing Impact from/to H5 files"""
@@ -840,7 +967,7 @@ class TestImpactH5IO(unittest.TestCase):
             npt.assert_array_equal(file["event_name"].asstr(), impact.event_name)
             npt.assert_array_equal(file["date"], impact.date)
             npt.assert_array_equal(file["coord_exp"], impact.coord_exp)
-            self.assertEqual(file.attrs["crs"], DEF_CRS)
+            self.assertEqual(file.attrs["crs"], impact.crs)
             npt.assert_array_equal(file["eai_exp"], impact.eai_exp)
             npt.assert_array_equal(file["at_event"], impact.at_event)
             npt.assert_array_equal(file["frequency"], impact.frequency)
@@ -848,15 +975,7 @@ class TestImpactH5IO(unittest.TestCase):
             self.assertEqual(file.attrs["unit"], impact.unit)
             self.assertEqual(file.attrs["aai_agg"], impact.aai_agg)
             self.assertEqual(file.attrs["frequency_unit"], impact.frequency_unit)
-            self.assertDictEqual(
-                dict(**file["tag"]["exp"].attrs), impact.tag["exp"].__dict__
-            )
-            self.assertDictEqual(
-                dict(**file["tag"]["haz"].attrs), impact.tag["haz"].__dict__
-            )
-            self.assertDictEqual(
-                dict(**file["tag"]["impf_set"].attrs), impact.tag["impf_set"].__dict__
-            )
+            self.assertEqual(file.attrs["haz_type"], impact.haz_type)
 
             if dense_imp_mat:
                 npt.assert_array_equal(file["imp_mat"], impact.imp_mat.toarray())
@@ -875,11 +994,7 @@ class TestImpactH5IO(unittest.TestCase):
         for name, value in impact_1.__dict__.items():
             self.assertIn(name, impact_2.__dict__)
             value_comp = getattr(impact_2, name)
-            # NOTE: Tags do not compare
-            if name == "tag":
-                for key in value:
-                    self.assertDictEqual(value[key].__dict__, value_comp[key].__dict__)
-            elif isinstance(value, sparse.csr_matrix):
+            if isinstance(value, sparse.csr_matrix):
                 npt.assert_array_equal(value.toarray(), value_comp.toarray())
             elif np.ndim(value) > 0:
                 npt.assert_array_equal(value, value_comp)
@@ -905,10 +1020,11 @@ class TestImpactH5IO(unittest.TestCase):
 
     def test_write_hdf5_type_fail(self):
         """Test that writing attributes with varying types results in an error"""
-        self.impact.event_name = [1, "a", 1.0, "b", "c", "d"]
-        with self.assertRaises(TypeError) as cm:
+        self.impact.event_name = ["a", 1, 1.0, "b", "c", "d"]
+        with self.assertRaisesRegex(
+            TypeError, "'event_name' must be a list of strings"
+        ):
             self.impact.write_hdf5(self.filepath)
-        self.assertIn("No conversion path for dtype", str(cm.exception))
 
     def test_cycle_hdf5(self):
         """Test writing and reading the same object"""
@@ -938,7 +1054,7 @@ class TestImpactH5IO(unittest.TestCase):
         self.assertEqual(impact.tot_value, 0)
         self.assertEqual(impact.aai_agg, 0)
         self.assertEqual(impact.unit, "")
-        self.assertEqual(impact.tag, {})
+        self.assertEqual(impact.haz_type, "")
 
     def test_read_hdf5_full(self):
         """Try reading a file full of data"""
@@ -956,15 +1072,7 @@ class TestImpactH5IO(unittest.TestCase):
         tot_value = 100
         aai_agg = 200
         unit = "unit"
-        haz_tag = dict(
-            haz_type="haz_type", file_name="file_name", description="description"
-        )
-        exp_tag = dict(file_name="exp", description="exp")
-        impf_set_tag = dict(file_name="impf_set", description="impf_set")
-
-        def write_tag(group, tag_kwds):
-            for key, value in tag_kwds.items():
-                group.attrs[key] = value
+        haz_type="haz_type"
 
         # Write the data
         with h5py.File(self.filepath, "w") as file:
@@ -983,11 +1091,7 @@ class TestImpactH5IO(unittest.TestCase):
             file.attrs["tot_value"] = tot_value
             file.attrs["aai_agg"] = aai_agg
             file.attrs["unit"] = unit
-            for group, kwds in zip(
-                ("haz", "exp", "impf_set"), (haz_tag, exp_tag, impf_set_tag)
-            ):
-                file.create_group(f"tag/{group}")
-                write_tag(file["tag"][group], kwds)
+            file.attrs["haz_type"] = haz_type
 
         # Load and check
         impact = Impact.from_hdf5(self.filepath)
@@ -1005,9 +1109,7 @@ class TestImpactH5IO(unittest.TestCase):
         self.assertEqual(impact.tot_value, tot_value)
         self.assertEqual(impact.aai_agg, aai_agg)
         self.assertEqual(impact.unit, unit)
-        self.assertEqual(impact.tag["haz"].__dict__, haz_tag)
-        self.assertEqual(impact.tag["exp"].__dict__, exp_tag)
-        self.assertEqual(impact.tag["impf_set"].__dict__, impf_set_tag)
+        self.assertEqual(impact.haz_type, haz_type)
 
         # Check with sparse
         with h5py.File(self.filepath, "r+") as file:
@@ -1020,6 +1122,15 @@ class TestImpactH5IO(unittest.TestCase):
         impact = Impact.from_hdf5(self.filepath)
         npt.assert_array_equal(impact.imp_mat.toarray(), [[0, 1, 2], [3, 0, 0]])
 
+        # Check with non-string event_name
+        event_name = [1.2, 2]
+        with h5py.File(self.filepath, "r+") as file:
+            del file["event_name"]
+            file.create_dataset("event_name", data=event_name)
+        with self.assertLogs("climada.engine.impact", "WARNING") as cm:
+            impact = Impact.from_hdf5(self.filepath)
+        self.assertIn("'event_name' is not stored as strings", cm.output[0])
+        self.assertListEqual(impact.event_name, ["1.2", "2.0"])
 
 # Execute Tests
 if __name__ == "__main__":
@@ -1027,6 +1138,7 @@ if __name__ == "__main__":
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestImpactPerYear))
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestIO))
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRPmatrix))
+    TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestImpactReg))
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestRiskTrans))
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestSelect))
     TESTS.addTests(unittest.TestLoader().loadTestsFromTestCase(TestConvertExp))

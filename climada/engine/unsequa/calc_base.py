@@ -21,6 +21,7 @@ Define Calc (uncertainty calculate) class.
 
 import logging
 import copy
+import itertools
 
 import datetime as dt
 
@@ -47,6 +48,31 @@ class Calc():
         Names of the required uncertainty variables.
     _metric_names : tuple(str)
         Names of the output metrics.
+
+    Notes
+    -----
+    Parallelization logics: for computation of the uncertainty users may
+    specify a number N of processes on which to perform the computations in
+    parallel. Since the computation for each individual sample of the
+    input parameters is independent of one another, we implemented a simple
+    distribution on the processes.
+
+    1. The samples are divided in N equal sub-sample chunks
+    2. Each chunk of samples is sent as one to a node for processing
+
+    Hence, this is equivalent to the user running the computation N times,
+    once for each sub-sample.
+    Note that for each process, all the input variables must be copied once,
+    and hence each parallel process requires roughly the same amount of memory
+    as if a single process would be used.
+
+    This approach differs from the usual parallelization strategy (where individual
+    samples are distributed), because each sample requires the entire input data.
+    With this method, copying data between processes is reduced to a minimum.
+
+    Parallelization is currently not available for the sensitivity computation,
+    as this requires all samples simoultenaously in the current implementation
+    of the SaLib library.
     """
 
     _input_var_names = ()
@@ -59,7 +85,6 @@ class Calc():
         """
         Empty constructor to be overwritten by subclasses
         """
-        pass
 
     def check_distr(self):
         """
@@ -91,7 +116,6 @@ class Calc():
                         )
                 distr_dict[input_param_name] = input_param_func
         return True
-
 
     @property
     def input_vars(self):
@@ -126,7 +150,7 @@ class Calc():
             distr_dict.update(input_var.distr_dict)
         return distr_dict
 
-    def est_comp_time(self, n_samples, time_one_run, pool=None):
+    def est_comp_time(self, n_samples, time_one_run, processes=None):
         """
         Estimate the computation time
 
@@ -153,9 +177,7 @@ class Calc():
                 "been assigned to exp before defining input_var, ..."
                 "\n If computation cannot be reduced, consider using"
                 " a surrogate model https://www.uqlab.com/", time_one_run)
-
-        ncpus = pool.ncpus if pool else 1
-        total_time = n_samples * time_one_run / ncpus
+        total_time = n_samples * time_one_run / processes
         LOGGER.info("\n\nEstimated computaion time: %s\n",
                     dt.timedelta(seconds=total_time))
 
@@ -181,8 +203,8 @@ class Calc():
             Number of samples as used in the sampling method from SALib
         sampling_method : str, optional
             The sampling method as defined in SALib. Possible choices:
-            'saltelli', 'fast_sampler', 'latin', 'morris', 'dgsm', 'ff'
-            https://salib.readthedocs.io/en/latest/api.html
+            'saltelli', 'latin', 'morris', 'dgsm', 'fast_sampler', 'ff', 'finite_diff',
+             https://salib.readthedocs.io/en/latest/api.html
             The default is 'saltelli'.
         sampling_kwargs : kwargs, optional
             Optional keyword arguments passed on to the SALib sampling_method.
@@ -192,6 +214,17 @@ class Calc():
         -------
         unc_output : climada.engine.uncertainty.unc_output.UncOutput()
             Uncertainty data object with the samples
+
+        Notes
+        -----
+        The 'ff' sampling method does not require a value for the N parameter.
+        The inputed N value is hence ignored in the sampling process in the case
+        of this method.
+        The 'ff' sampling method requires a number of uncerainty parameters to be
+        a power of 2. The users can generate dummy variables to achieve this
+        requirement. Please refer to https://salib.readthedocs.io/en/latest/api.html
+        for more details.
+
 
         See Also
         --------
@@ -209,11 +242,17 @@ class Calc():
             'names' : param_labels,
             'bounds' : [[0, 1]]*len(param_labels)
             }
-
+        #for the ff sampler, no value of N is needed. For API consistency the user
+        #must input a value that is ignored and a warning is given.
+        if sampling_method == 'ff':
+            LOGGER.warning("You are using the 'ff' sampler which does not require "
+                           "a value for N. The entered N value will be ignored"
+                           "in the sampling process.")
         uniform_base_sample = self._make_uniform_base_sample(N, problem_sa,
                                                              sampling_method,
                                                              sampling_kwargs)
         df_samples = pd.DataFrame(uniform_base_sample, columns=param_labels)
+
         for param in list(df_samples):
             df_samples[param] = df_samples[param].apply(
                 self.distr_dict[param].ppf
@@ -249,7 +288,7 @@ class Calc():
             SALib sampling method.
         sampling_method: string
             The sampling method as defined in SALib. Possible choices:
-            'saltelli', 'fast_sampler', 'latin', 'morris', 'dgsm', 'ff'
+            'saltelli', 'latin', 'morris', 'dgsm', 'fast_sampler', 'ff', 'finite_diff',
             https://salib.readthedocs.io/en/latest/api.html
         sampling_kwargs: dict()
             Optional keyword arguments passed on to the SALib sampling method.
@@ -270,8 +309,20 @@ class Calc():
         #c.f. https://stackoverflow.com/questions/2724260/why-does-pythons-import-require-fromlist
         import importlib # pylint: disable=import-outside-toplevel
         salib_sampling_method = importlib.import_module(f'SALib.sample.{sampling_method}')
-        sample_uniform = salib_sampling_method.sample(
-            problem = problem_sa, N = N, **sampling_kwargs)
+
+        if sampling_method == 'ff': #the ff sampling has a fixed sample size and
+                                    #does not require the N parameter
+            if problem_sa['num_vars'] & (problem_sa['num_vars'] - 1) != 0:
+                raise ValueError("The number of parameters must be a power of 2. "
+                                 "To use the ff sampling method, you can generate "
+                                 "dummy parameters to overcome this limitation."
+                                 " See https://salib.readthedocs.io/en/latest/api.html")
+
+            sample_uniform = salib_sampling_method.sample(
+            problem = problem_sa, **sampling_kwargs)
+        else:
+            sample_uniform = salib_sampling_method.sample(
+                problem = problem_sa, N = N, **sampling_kwargs)
         return sample_uniform
 
     def sensitivity(self, unc_output, sensitivity_method = 'sobol',
@@ -298,21 +349,27 @@ class Calc():
 
         Parameters
         ----------
-        unc_output : climada.engine.uncertainty.unc_output.UncOutput
+        unc_output : climada.engine.unsequa.UncOutput
             Uncertainty data object in which to store the sensitivity indices
         sensitivity_method : str, optional
-            Sensitivity analysis method from SALib.analyse. Possible choices: 'fast', 'rbd_fact',
-            'morris', 'sobol', 'delta', 'ff'. Note that in Salib, sampling methods and sensitivity
+            Sensitivity analysis method from SALib.analyse. Possible choices: 'sobol', 'fast',
+            'rbd_fast', 'morris', 'dgsm', 'ff', 'pawn', 'rhdm', 'rsa', 'discrepancy', 'hdmr'.
+            Note that in Salib, sampling methods and sensitivity
             analysis methods should be used in specific pairs:
             https://salib.readthedocs.io/en/latest/api.html
-            Default: 'sobol'
         sensitivity_kwargs: dict, optional
             Keyword arguments of the chosen SALib analyse method.
             The default is to use SALib's default arguments.
 
+        Notes
+        -----
+        The variables 'Em','Term','X','Y' are removed from the output of the
+        'hdmr' method to ensure compatibility with unsequa.
+        The 'Delta' method is currently not supported.
+
         Returns
         -------
-        sens_output : climada.engine.uncertainty.unc_output.UncOutput()
+        sens_output : climada.engine.unsequa.UncOutput
             Uncertainty data object with all the sensitivity indices,
             and all the uncertainty data copied over from unc_output.
 
@@ -336,7 +393,7 @@ class Calc():
 
         sens_output = copy.deepcopy(unc_output)
 
-        #Certaint Salib method required model input (X) and output (Y), others
+        #Certain Salib method required model input (X) and output (Y), others
         #need only ouput (Y)
         salib_kwargs = method.analyze.__code__.co_varnames  # obtain all kwargs of the salib method
         X = unc_output.samples_df.to_numpy() if 'X' in salib_kwargs else None
@@ -355,10 +412,120 @@ class Calc():
         return sens_output
 
 
+def _multiprocess_chunksize(samples_df, processes):
+    """Divides the samples into chunks for multiprocesses computing
+
+    The goal is to send to each processing node an equal number
+    of samples to process. This make the parallel processing anologous
+    to running the uncertainty assessment independently on each nodes
+    for a subset of the samples, instead of distributing individual samples
+    on the nodes dynamically. Hence, all the heavy input variables
+    are copied/sent once to each node only.
+
+    Parameters
+    ----------
+    samples_df : pd.DataFrame
+        samples dataframe
+    processes : int
+        number of processes
+
+    Returns
+    -------
+    int
+        the number of samples in each chunk
+    """
+    return np.ceil(
+        samples_df.shape[0] / processes
+        ).astype(int)
+
+
+def _transpose_chunked_data(metrics):
+    """Transposes the output metrics lists from one list per
+    chunk of samples to one list per output metric
+
+    [ [x1, [y1, z1]], [x2, [y2, z2]] ] ->
+    [ [x1, x2], [[y1, z1], [y2, z2]] ]
+
+    Parameters
+    ----------
+    metrics : list
+        list of list as returned by the uncertainty mapings
+
+    Returns
+    -------
+    list
+        list of climada output uncertainty
+
+    See Also
+    --------
+    calc_impact._map_impact_calc
+        map for impact uncertainty
+    calc_cost_benefits._map_costben_calc
+        map for cost benefit uncertainty
+    """
+    return [
+        list(itertools.chain.from_iterable(x))
+        for x in zip(*metrics)
+        ]
+
+
+def _sample_parallel_iterator(samples, chunksize, **kwargs):
+    """
+    Make iterator over chunks of samples
+    with repeated kwargs for each chunk.
+
+    Parameters
+    ----------
+    samples : pd.DataFrame
+        Dataframe of samples
+    **kwargs : arguments to repeat
+        Arguments to repeat for parallel computations
+
+    Returns
+    -------
+    iterator
+        suitable for methods _map_impact_calc and _map_costben_calc
+
+    """
+    def _chunker(df, size):
+        """
+        Divide the dataframe into chunks of size number of lines
+        """
+        for pos in range(0, len(df), size):
+            yield df.iloc[pos:pos + size]
+
+    return zip(
+        _chunker(samples, chunksize),
+        *(itertools.repeat(item) for item in kwargs.values())
+        )
+
+
 def _calc_sens_df(method, problem_sa, sensitivity_kwargs, param_labels, X, unc_df):
+    """Compute the sensitifity indices
+
+    Parameters
+    ----------
+    method : str
+        SALib sensitivity method name
+    problem_sa :dict
+        dictionnary for sensitivty method for SALib
+    sensitivity_kwargs : kwargs
+        passed on to SALib.method.analyse
+    param_labels : list(str)
+        list of name of uncertainty input parameters
+    X : numpy.ndarray
+        array of input parameter samples
+    unc_df : DataFrame
+        Dataframe containing the uncertainty values
+
+    Returns
+    -------
+    DataFrame
+        Values of the sensitivity indices
+    """
     sens_first_order_dict = {}
     sens_second_order_dict = {}
-    for (submetric_name, metric_unc) in unc_df.iteritems():
+    for (submetric_name, metric_unc) in unc_df.items():
         Y = metric_unc.to_numpy()
         if X is not None:
             sens_indices = method.analyze(problem_sa, X, Y,
@@ -366,10 +533,47 @@ def _calc_sens_df(method, problem_sa, sensitivity_kwargs, param_labels, X, unc_d
         else:
             sens_indices = method.analyze(problem_sa, Y,
                                                     **sensitivity_kwargs)
+        #refactor incoherent SALib output
+        nparams = len(param_labels)
+        if method.__name__[-3:] == '.ff': #ff method
+            if sensitivity_kwargs['second_order']:
+                #parse interaction terms of sens_indices to a square matrix
+                #to ensure consistency with unsequa
+                interaction_names = sens_indices.pop('interaction_names')
+                interactions = np.full((nparams, nparams), np.nan)
+                #loop over interaction names and extract each param pair,
+                #then match to the corresponding param from param_labels
+                for i,interaction_name in enumerate(interaction_names):
+                    interactions[param_labels.index(interaction_name[0]),
+                                 param_labels.index(interaction_name[1])] = sens_indices['IE'][i]
+                sens_indices['IE'] = interactions
+
+        if method.__name__[-5:] == '.hdmr': #hdmr method
+            #first, remove variables that are incompatible with unsequa output
+            keys_to_remove = ['Em','Term','select', 'RT', 'Y_em', 'idx', 'X', 'Y']
+            sens_indices = {k: v for k, v in sens_indices.items()
+                            if k not in keys_to_remove}
+            names = sens_indices.pop('names') #names of terms
+
+            #second, refactor to 2D
+            for si, si_val_array in sens_indices.items():
+                if (np.array(si_val_array).ndim == 1 and    #for everything that is 1d and has
+                    np.array(si_val_array).size > nparams): #lentgh > n params, refactor to 2D
+                    si_new_array = np.full((nparams, nparams), np.nan)
+                    np.fill_diagonal(si_new_array, si_val_array[0:nparams]) #simple terms go on diag
+                    for i,interaction_name in enumerate(names[nparams:]):
+                        t1, t2 = interaction_name.split('/') #interaction terms
+                        si_new_array[param_labels.index(t1),
+                                      param_labels.index(t2)] = si_val_array[nparams+i]
+                    sens_indices[si] = si_new_array
+
+
         sens_first_order = np.array([
             np.array(si_val_array)
             for si, si_val_array in sens_indices.items()
-            if (np.array(si_val_array).ndim == 1 and si!='names')  # dirty trick due to Salib incoherent output
+            if (np.array(si_val_array).ndim == 1 # dirty trick due to Salib incoherent output
+                and si!='names'
+                and np.array(si_val_array).size == len(param_labels))
             ]).ravel()
         sens_first_order_dict[submetric_name] = sens_first_order
 
@@ -381,6 +585,7 @@ def _calc_sens_df(method, problem_sa, sensitivity_kwargs, param_labels, X, unc_d
         sens_second_order_dict[submetric_name] = sens_second_order
 
     sens_first_order_df = pd.DataFrame(sens_first_order_dict, dtype=np.number)
+
     if not sens_first_order_df.empty:
         si_names_first_order, param_names_first_order = _si_param_first(param_labels, sens_indices)
         sens_first_order_df.insert(0, 'si', si_names_first_order)
@@ -404,6 +609,21 @@ def _calc_sens_df(method, problem_sa, sensitivity_kwargs, param_labels, X, unc_d
 
 
 def _si_param_first(param_labels, sens_indices):
+    """Extract the first order sensivity indices from SALib ouput
+
+    Parameters
+    ----------
+    param_labels : list(str)
+        name of the unceratinty input parameters
+    sens_indices : dict
+       sensitivity indidices dictionnary as produced by SALib
+
+    Returns
+    -------
+    si_names_first_order, param_names_first_order: list, list
+        Names of the sensivity indices of first order for all input parameters
+        and Parameter names for each sentivity index
+    """
     n_params  = len(param_labels)
 
     si_name_first_order_list = [
@@ -421,6 +641,21 @@ def _si_param_first(param_labels, sens_indices):
 
 
 def _si_param_second(param_labels, sens_indices):
+    """Extract second order sensitivity indices
+
+    Parameters
+    ----------
+    param_labels : list(str)
+        name of the unceratinty input parameters
+    sens_indices : dict
+       sensitivity indidices dictionnary as produced by SALib
+
+    Returns
+    -------
+    si_names_second_order, param_names_second_order, param_names_second_order_2: list, list, list
+        Names of the sensivity indices of second order for all input parameters
+        and Pairs of parameter names for each 2nd order sentivity index
+    """
     n_params  = len(param_labels)
     si_name_second_order_list = [
         key

@@ -23,6 +23,7 @@ import numpy as np
 
 from climada.entity.exposures.litpop import nightlight
 from climada.util.constants import SYSTEM_DIR
+from pathlib import Path
 
 BM_FILENAMES = nightlight.BM_FILENAMES
 
@@ -55,22 +56,6 @@ class TestNightLight(unittest.TestCase):
         self.assertRaises(ValueError, nightlight.get_required_nl_files,
                           (-90, 90))
 
-    def test_check_files_exist(self):
-        """Test check_nightlight_local_file_exists"""
-        # If invalid directory is supplied it has to fail
-        try:
-            nightlight.check_nl_local_file_exists(
-                np.ones(np.count_nonzero(BM_FILENAMES)), 'Invalid/path')[0]
-            raise Exception("if the path is not valid, check_nl_local_file_exists should fail")
-        except ValueError:
-            pass
-        files_exist = nightlight.check_nl_local_file_exists(
-            np.ones(np.count_nonzero(BM_FILENAMES)), SYSTEM_DIR)
-        self.assertTrue(
-            files_exist.sum() > 0,
-            f'{files_exist} {BM_FILENAMES}'
-        )
-
     def test_download_nightlight_files(self):
         """Test check_nightlight_local_file_exists"""
         # Not the same length of arguments
@@ -78,6 +63,44 @@ class TestNightLight(unittest.TestCase):
 
         # The same length but not the correct length
         self.assertRaises(ValueError, nightlight.download_nl_files, (1, 0, 1), (1, 1, 1))
+
+    def test_get_required_nl_files(self):
+        """ get_required_nl_files return a boolean matrix of 0 and 1
+            indicating which tile of NASA nighlight files are needed giving
+            a bounding box. This test check a few configuration of tiles
+            and check that a value error is raised if the bounding box are
+            incorrect """
+
+        # incorrect bounds: bounds size =!  4, min lon > max lon, min lat > min lat
+        BOUNDS = [(20, 30, 40),
+                  (120, -20, 110, 30),
+                  (-120, 50, 130, 10)]
+        # correct bounds
+        bounds_c1 = (-120, -20, 0, 40)
+        bounds_c2 = (-70, -20, 10, 40)
+        bounds_c3 = (160, 10, 180, 40)
+
+        for bounds in BOUNDS:
+            with self.assertRaises(ValueError) as cm:
+
+                nightlight.get_required_nl_files(bounds = bounds)
+
+                self.assertEqual('Invalid bounds supplied. `bounds` must be tuple'
+                                ' with (min_lon, min_lat, max_lon, max_lat).',
+                                str(cm.exception))
+
+        # test first correct bounds configurations
+        req_files = nightlight.get_required_nl_files(bounds = bounds_c1)
+        bool = np.array_equal(np.array([1, 1, 1, 1, 1, 1, 0, 0]), req_files)
+        self.assertTrue(bool)
+        # second correct configuration
+        req_files = nightlight.get_required_nl_files(bounds = bounds_c2)
+        bool = np.array_equal(np.array([0, 0, 1, 1, 1, 1, 0, 0]), req_files)
+        self.assertTrue(bool)
+        # third correct configuration
+        req_files = nightlight.get_required_nl_files(bounds = bounds_c3)
+        bool = np.array_equal(np.array([0, 0, 0, 0, 0, 0, 1, 0]), req_files)
+        self.assertTrue(bool)
 
 # Execute Tests
 if __name__ == "__main__":

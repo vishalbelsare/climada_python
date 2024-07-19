@@ -36,7 +36,6 @@ from scipy import sparse
 from climada.util.config import CONFIG
 from climada.hazard.base import Hazard
 from climada.hazard.centroids.centr import Centroids
-from climada.hazard.tag import Tag as TagHazard
 from climada.util.files_handler import get_file_names
 from climada.util.dates_times import (datetime64_to_ordinal,
                                       last_year,
@@ -120,7 +119,7 @@ class StormEurope(Hazard):
         self.__dict__ = StormEurope.from_footprints(*args, **kwargs).__dict__
 
     @classmethod
-    def from_footprints(cls, path, description=None, ref_raster=None, centroids=None,
+    def from_footprints(cls, path, ref_raster=None, centroids=None,
                         files_omit='fp_era20c_1990012515_701_0.nc', combine_threshold=None,
                         intensity_thres=None):
         """Create new StormEurope object from WISC footprints.
@@ -135,9 +134,6 @@ class StormEurope(Hazard):
             path to a single netCDF WISC footprint, or a folder
             containing only footprints, or a globbing pattern to one or
             more footprints.
-        description : str, optional
-            description of the events, defaults
-            to 'WISC historical hazard set'
         ref_raster : str, optional
             Reference netCDF file from which to
             construct a new barebones Centroids instance. Defaults to
@@ -200,13 +196,6 @@ class StormEurope(Hazard):
         haz.frequency = np.divide(
             np.ones_like(haz.date),
             np.max([(last_year(haz.date) - first_year(haz.date)), 1])
-        )
-
-        if description is None:
-            description = "WISC historical hazard set."
-        haz.tag = TagHazard(
-            HAZ_TYPE, 'Hazard set not saved by default',
-            description=description,
         )
 
         if combine_threshold is not None:
@@ -377,8 +366,6 @@ class StormEurope(Hazard):
             frequency=np.divide(
                 np.ones_like(event_id),
                 np.unique(ncdf.epsd_1).size),
-            description=description,
-            file_name="Hazard set not saved, too large to pickle",
         )
 
         # close netcdf file
@@ -514,8 +501,7 @@ class StormEurope(Hazard):
             frequency=np.divide(
                 np.ones_like(event_id),
                 np.unique(stacked.number).size),
-            description=description,
-            file_name="Hazard set not saved, too large to pickle")
+        )
         haz.check()
 
         # delete generated .grib2 and .4cc40.idx files
@@ -571,9 +557,7 @@ class StormEurope(Hazard):
         if create_meshgrid:
             lats, lons = np.array([np.repeat(lats, len(lons)),
                                    np.tile(lons, len(lats))])
-        cent = Centroids.from_lat_lon(lats, lons)
-        cent.set_area_pixel()
-        cent.set_on_land()
+        cent = Centroids(lat=lats, lon=lons, on_land='natural_earth')
 
         return cent
 
@@ -672,26 +656,27 @@ class StormEurope(Hazard):
             intensity = intensity.multiply(intensity > self.intensity_thres)
 
         cent = self.centroids
+        area_pixel = cent.get_area_pixel()
 
         if sel_cen is not None:
             pass
         elif on_land is True:
-            sel_cen = cent.on_land
+            sel_cen = cent.on_land.astype(bool)
         else:  # select all centroids
-            sel_cen = np.ones_like(cent.area_pixel, dtype=bool)
+            sel_cen = np.ones_like(area_pixel, dtype=bool)
 
         ssi = np.zeros(intensity.shape[0])
 
         if method == 'dawkins':
-            area_c = cent.area_pixel / 1000 / 1000 * sel_cen
+            area_c = area_pixel / 1000 / 1000 * sel_cen
             for i, inten_i in enumerate(intensity):
-                ssi_i = area_c * inten_i.power(3).todense().T
+                ssi_i = inten_i.power(3).dot(area_c)
                 # matrix crossproduct (row x column vector)
                 ssi[i] = ssi_i.item(0)
 
         elif method == 'wisc_gust':
             for i, inten_i in enumerate(intensity[:, sel_cen]):
-                area = np.sum(cent.area_pixel[inten_i.indices]) / 1000 / 1000
+                area = np.sum(area_pixel[inten_i.indices]) / 1000 / 1000
                 inten_mean = np.mean(inten_i)
                 ssi[i] = area * np.power(inten_mean, 3)
 
@@ -788,8 +773,7 @@ class StormEurope(Hazard):
         """
         # bool vector selecting the targeted centroids
         if reg_id is not None:
-            if self.centroids.region_id.size == 0:
-                self.centroids.set_region_id()
+            self.centroids.set_region_id(overwrite=False)
             if not isinstance(reg_id, list):
                 reg_id = [reg_id]
             sel_cen = np.isin(self.centroids.region_id, reg_id)
@@ -840,8 +824,6 @@ class StormEurope(Hazard):
             # years
             frequency=np.divide(np.repeat(self.frequency, N_PROB_EVENTS),
                                 N_PROB_EVENTS),
-            file_name='Hazard set not saved by default',
-            description='WISC probabilistic hazard set according to Schwierz et al.',
             orig=(event_id % 100 == 0),
         )
         new_haz.check()
@@ -884,7 +866,7 @@ class StormEurope(Hazard):
         # reshape to the raster that the data represents
         intensity2d = intensity1d.reshape(self.centroids.shape)
 
-        # scipy.sparse.csr.csr_matrix elementwise methods (to avoid this:
+        # scipy.sparse.csr_matrix elementwise methods (to avoid this:
         # https://github.com/ContinuumIO/anaconda-issues/issues/9129 )
         intensity2d_sqrt = intensity2d.power(1.0 / power).todense()
         intensity2d_pwr = intensity2d.power(power).todense()

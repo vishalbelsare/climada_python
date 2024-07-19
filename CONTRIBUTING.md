@@ -1,10 +1,28 @@
 # CLIMADA Contribution Guide
 
-Thank you for contributing to CLIMADA!
+We welcome any contribution to CLIMADA and want to express our thanks to everybody who contributes.
 
-## Overview
+## What Warrants a Contribution?
 
-Before you start, please have a look at our [Developer Guide][devguide].
+Anything!
+For orientation, these are some categories of possible contributions we can think of:
+
+* **Technical problems and bugs:** Did you encounter a problem when using CLIMADA? Raise an [issue](https://github.com/CLIMADA-project/climada_python/issues) in our repository, providing a description or ideally a code replicating the error. Did you already find a solution to the problem? Please raise a pull request to help us resolve the issue!
+* **Documentation and Tutorial Updates:** Found a typo in the documentation? Is a tutorial lacking some information you find important? Simply fix a line, or add a paragraph. We are happy to incorporate you additions! Please raise a pull request!
+* **New Modules and Utility Functions:** Did you create a function or an entire module you find useful for your work? Maybe you are not the only one! Feel free to simply raise a pull request for functions that improve, e.g., plotting or data handling. As an entire module has to be carefully integrated into the framework, it might help if you talk to us first so we can design the module and plan the next steps. You can do that by raising an issue or starting a [discussion](https://github.com/CLIMADA-project/climada_python/discussions) on GitHub.
+
+A good place to start a personal discussion is our monthly CLIMADA developers call.
+Please contact the [lead developers](https://wcr.ethz.ch/research/climada.html) if you want to join.
+
+## Why Should You Contribute?
+
+* You will be listed as author of the CLIMADA repository in the [AUTHORS](AUTHORS.md) file.
+* You will improve the quality of the CLIMADA software for you and for everybody else using it.
+* You will gain insights into scientific software development.
+
+## Minimal Steps to Contribute
+
+Before you start, please have a look at our Developer Guide section in the [CLIMADA Docs][docs].
 
 To contribute follow these steps:
 
@@ -47,21 +65,22 @@ To contribute follow these steps:
 
 ## Resources
 
-The CLIMADA documentation provides a [Developer Guide][devguide].
+The [CLIMADA documentation][docs] provides several Developer Guides.
 Here's a selection of the commonly required information:
 
 * How to use Git and GitHub for CLIMADA development: [Development and Git and CLIMADA](https://climada-python.readthedocs.io/en/latest/guide/Guide_Git_Development.html)
-* Coding instructions for CLIMADA: [Python Dos and Don'ts](https://climada-python.readthedocs.io/en/latest/guide/Guide_PythonDos-n-Donts.html), [Performance Tips](https://climada-python.readthedocs.io/en/latest/guide/Guide_Py_Performance.html), [CLIMADA Conventions](https://climada-python.readthedocs.io/en/latest/guide/Guide_Miscellaneous.html)
-* How to execute tests in CLIMADA: [Testing and Continuous Integration][testing]
+* Coding instructions for CLIMADA: [Python Dos and Don'ts](https://climada-python.readthedocs.io/en/latest/guide/Guide_PythonDos-n-Donts.html), [Performance Tips](https://climada-python.readthedocs.io/en/latest/guide/Guide_Py_Performance.html), [CLIMADA Conventions](https://climada-python.readthedocs.io/en/latest/guide/Guide_CLIMADA_conventions.html)
+* How to execute tests in CLIMADA: [Testing][testing] and [Continuous Integration](https://climada-python.readthedocs.io/en/latest/guide/Guide_continuous_integration_GitHub_actions.html)
 
 ## Pull Requests
 
 After developing a new feature, fixing a bug, or updating the tutorials, you can create a [pull request](https://docs.github.com/en/pull-requests) to have your changes reviewed and then merged into the CLIMADA code base.
 To ensure that your pull request can be reviewed quickly and easily, please have a look at the _Resources_ above before opening a pull request.
-In particular, please check out the [Pull Request instructions](https://climada-python.readthedocs.io/en/latest/guide/Guide_Git_Development.html#Pull-requests).
+In particular, please check out the [Pull Request instructions](https://climada-python.readthedocs.io/en/latest/guide/Guide_Git_Development.html#pull-requests).
 
 We provide a description template for pull requests that helps you provide the essential information for reviewers.
 It also contains a checklist for both pull request authors and reviewers to guide the review process.
 
+[docs]: https://climada-python.readthedocs.io/en/latest/
 [devguide]: https://climada-python.readthedocs.io/en/latest/#developer-guide
-[testing]: https://climada-python.readthedocs.io/en/latest/guide/Guide_Continuous_Integration_and_Testing.html
+[testing]: https://climada-python.readthedocs.io/en/latest/guide/Guide_Testing.html

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from climada import CONFIG
 from climada.entity.entity_def import Entity
-from climada.entity import Exposures, ImpactFuncSet
+from climada.entity import Exposures, ImpactFuncSet, ImpactFunc
 from climada.hazard.base import Hazard
 from climada.engine import ImpactCalc, Impact
 from climada.engine.impact_calc import LOGGER as ILOG
@@ -70,6 +70,16 @@ class TestImpactCalc(unittest.TestCase):
         np.testing.assert_array_equal(HAZ.event_id, icalc.hazard.event_id)
         np.testing.assert_array_equal(HAZ.event_name, icalc.hazard.event_name)
 
+        # Test check matrices
+        hazard = deepcopy(HAZ)
+        hazard.intensity[0, hazard.intensity.indices[0]] = 0
+        hazard.fraction = sparse.csr_matrix(np.ones((1, 1)))
+        with self.assertRaisesRegex(
+            ValueError, "Intensity and fraction matrices must have the same shape"
+        ):
+            ImpactCalc(ENT.exposures, ENT.impact_funcs, hazard)
+            self.assertEqual(hazard.intensity.nnz, HAZ.intensity.nnz - 1)  # was pruned
+
     def test_metrics(self):
         """Test methods to get impact metrics"""
         mat = sparse.csr_matrix(np.array(
@@ -100,6 +110,61 @@ class TestImpactCalc(unittest.TestCase):
         np.testing.assert_array_equal(
             imp.todense(), np.array([[0, 0, 1], [0, 1, 0]])
             )
+
+    def test_error_handling_mismatch_haz_type(self):
+        """Test error handling in case hazard type of hazard
+        does not appear in impf_set or exposures"""
+        haz_tc = Hazard('TC')
+        exp_tc = Exposures()
+        exp_tc.gdf['impf_TC'] = 1
+        exp_ws = Exposures()
+        exp_ws.gdf['impf_WS'] = 2
+        impf = ImpactFunc()
+        impf.id = 1
+        impf.intensity = np.array([0, 20])
+        impf.paa = np.array([0, 1])
+        impf.mdd = np.array([0, 0.5])
+        impf.haz_type = 'TC'
+        impfset_tc = ImpactFuncSet([impf])
+        impf.haz_type = 'WS'
+        impfset_ws = ImpactFuncSet([impf])
+        impf.haz_type = ''
+        impfset_undef = ImpactFuncSet([impf])
+        try:
+            ImpactCalc(exp_ws, impfset_tc, haz_tc).impact()
+        except Exception as e:
+            self.assertEqual(str(e), "Impact calculation not possible. No impact "
+                             "functions found for hazard type TC in exposures.")
+        try:
+            ImpactCalc(exp_tc, impfset_ws, haz_tc).impact()
+        except Exception as e:
+            self.assertEqual(str(e), "Impact calculation not possible. No impact "
+                             "functions found for hazard type TC in impf_set.")
+        try:
+            ImpactCalc(exp_tc, impfset_undef, haz_tc).impact()
+        except Exception as e:
+            self.assertEqual(str(e), "Impact calculation not possible. No impact "
+                             "functions found for hazard type TC in impf_set.")
+    def test_error_handling_mismatch_impf_ids(self):
+        """Test error handling in case impf ids in exposures
+        does not appear in impf_set"""
+        haz = Hazard('TC')
+        exp = Exposures()
+        exp.gdf.loc[0,'impf_TC'] = 1
+        exp.gdf.loc[1,'impf_TC'] = 2
+        impf_exp = ImpactFunc(haz_type='TC', id=1)
+        impf_noexp = deepcopy(impf_exp)
+        impf_noexp.id = 3
+        impfset = ImpactFuncSet([impf_exp, impf_noexp])
+
+        with self.assertRaises(ValueError) as cm:
+            ImpactCalc(exp, impfset, haz).impact()
+        the_exception = cm.exception
+        self.assertEqual(the_exception.args[0],
+                         "The associated impact function(s) with id(s) 2 have no match in "
+                         "impact function set for hazard type \'TC\'.\nPlease make sure "
+                         "that all exposure points are associated with an impact "
+                         "function that is included in the impact function set.")
 
     def test_calc_impact_TC_pass(self):
         """Test compute impact"""
@@ -651,7 +716,6 @@ class TestReturnImpact(unittest.TestCase):
         self.icalc._return_impact(self.imp_mat_gen, save_mat=True)
         from_eih_mock.assert_called_once_with(
             ENT.exposures,
-            ENT.impact_funcs,
             HAZ,
             "at_event",
             "eai_exp",
@@ -672,11 +736,10 @@ class TestReturnImpact(unittest.TestCase):
         # Need to check every argument individually due to the last one being a matrix
         call_args = from_eih_mock.call_args.args
         self.assertEqual(call_args[0], ENT.exposures)
-        self.assertEqual(call_args[1], ENT.impact_funcs)
-        self.assertEqual(call_args[2], HAZ)
-        self.assertEqual(call_args[3], "at_event")
-        self.assertEqual(call_args[4], "eai_exp")
-        self.assertEqual(call_args[5], "aai_agg")
+        self.assertEqual(call_args[1], HAZ)
+        self.assertEqual(call_args[2], "at_event")
+        self.assertEqual(call_args[3], "eai_exp")
+        self.assertEqual(call_args[4], "aai_agg")
         np.testing.assert_array_equal(
             from_eih_mock.call_args.args[-1], sparse.csr_matrix((0, 0)).toarray()
         )

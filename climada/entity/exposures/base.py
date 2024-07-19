@@ -36,7 +36,7 @@ from rasterio.warp import Resampling
 import contextily as ctx
 import cartopy.crs as ccrs
 
-from climada.entity.tag import Tag
+from climada.hazard import Hazard
 import climada.util.hdf5_handler as u_hdf5
 from climada.util.constants import ONE_LAT_KM, DEF_CRS, CMAP_RASTER
 import climada.util.coordinates as u_coord
@@ -83,8 +83,8 @@ class Exposures():
 
     Attributes
     ----------
-    tag : climada.entity.tag.Tag
-        metada - information about the source data
+    description : str
+        metadata - description of content and origin of the data
     ref_year : int
         metada - reference year
     value_unit : str
@@ -120,7 +120,7 @@ class Exposures():
         TC. There might be different hazards defined: centr_TC, centr_FL, ...
         Computed in method assign_centroids().
     """
-    _metadata = ['tag', 'ref_year', 'value_unit', 'meta']
+    _metadata = ['description', 'ref_year', 'value_unit', 'meta']
 
     vars_oblig = ['value', 'latitude', 'longitude']
     """Name of the variables needed to compute the impact."""
@@ -141,7 +141,7 @@ class Exposures():
             # In case of gdf without geometry, empty or before set_geometry_points was called
             return self.meta.get('crs')
 
-    def __init__(self, *args, meta=None, tag=None, ref_year=DEF_REF_YEAR,
+    def __init__(self, *args, meta=None, description=None, ref_year=DEF_REF_YEAR,
                  value_unit=DEF_VALUE_UNIT, crs=None, **kwargs):
         """Creates an Exposures object from a GeoDataFrame
 
@@ -153,8 +153,8 @@ class Exposures():
             Named arguments of the GeoDataFrame constructor, additionally
         meta : dict, optional
             Metadata dictionary. Default: {} (empty dictionary)
-        tag : climada.entity.exposures.tag.Tag, optional
-            Exposures tag. Defaults to the entry of the same name in `meta` or an empty Tag object.
+        description : str, optional
+            Default: None
         ref_year : int, optional
             Reference Year. Defaults to the entry of the same name in `meta` or 2018.
         value_unit : str, optional
@@ -167,7 +167,7 @@ class Exposures():
         self.meta = {} if meta is None else meta
         if not isinstance(self.meta, dict):
             raise ValueError("meta must be a dictionary")
-        self.tag = self.meta.get('tag', Tag()) if tag is None else tag
+        self.description = self.meta.get('description') if description is None else description
         self.ref_year = self.meta.get('ref_year', DEF_REF_YEAR) if ref_year is None else ref_year
         self.value_unit = (self.meta.get('value_unit', DEF_VALUE_UNIT)
                            if value_unit is None else value_unit)
@@ -329,7 +329,7 @@ class Exposures():
         Parameters
         ----------
         haz_type : str or None
-            hazard type, as in the hazard's tag.haz_type
+            hazard type, as in the hazard's.haz_type
             which is the HAZ_TYPE constant of the hazard's module
 
         Returns
@@ -369,6 +369,11 @@ class Exposures():
                          threshold=u_coord.NEAREST_NEIGHBOR_THRESHOLD,
                          overwrite=True):
         """Assign for each exposure coordinate closest hazard coordinate.
+        The Exposures ``gdf`` will be altered by this method. It will have an additional
+        (or modified) column named ``centr_[hazard.HAZ_TYPE]`` after the call.
+
+        Uses the utility function ``u_coord.match_centroids``. See there for details
+        and parameters.
 
         The value -1 is used for distances larger than ``threshold`` in point distances.
         In case of raster hazards the value -1 is used for centroids outside of the raster.
@@ -392,9 +397,10 @@ class Exposures():
 
         See Also
         --------
-        climada.util.coordinates.assign_coordinates
+        climada.util.coordinates.match_grid_points: method to associate centroids to
+            exposure points when centroids is a raster
+        climada.util.coordinates.match_coordinates:
             method to associate centroids to exposure points
-
         Notes
         -----
         The default order of use is:
@@ -411,7 +417,7 @@ class Exposures():
         distance metric. This however is slower for (quasi-)gridded data,
         and works only for non-gridded data.
         """
-        haz_type = hazard.tag.haz_type
+        haz_type = hazard.haz_type
         centr_haz = INDICATOR_CENTR + haz_type
         if centr_haz in self.gdf:
             LOGGER.info('Exposures matching centroids already found for %s', haz_type)
@@ -422,18 +428,16 @@ class Exposures():
 
         LOGGER.info('Matching %s exposures with %s centroids.',
                     str(self.gdf.shape[0]), str(hazard.centroids.size))
+
         if not u_coord.equal_crs(self.crs, hazard.centroids.crs):
             raise ValueError('Set hazard and exposure to same CRS first!')
-        if hazard.centroids.meta:
-            assigned = u_coord.assign_grid_points(
-                self.gdf.longitude.values, self.gdf.latitude.values,
-                hazard.centroids.meta['width'], hazard.centroids.meta['height'],
-                hazard.centroids.meta['transform'])
-        else:
-            assigned = u_coord.assign_coordinates(
-                np.stack([self.gdf.latitude.values, self.gdf.longitude.values], axis=1),
-                hazard.centroids.coord, distance=distance, threshold=threshold)
-        self.gdf[centr_haz] = assigned
+        # Note: equal_crs is tested here, rather than within match_centroids(),
+        # because exp.gdf.crs may not be defined, but exp.crs must be defined.
+
+        assigned_centr = u_coord.match_centroids(self.gdf, hazard.centroids,
+                        distance=distance, threshold=threshold)
+        self.gdf[centr_haz] = assigned_centr
+
 
     def set_geometry_points(self, scheduler=None):
         """Set geometry attribute of GeoDataFrame with Points from latitude and
@@ -460,8 +464,8 @@ class Exposures():
         self.__dict__ = Exposures.from_raster(*args, **kwargs).__dict__
 
     @classmethod
-    def from_raster(cls, file_name, band=1, src_crs=None, window=False,
-                        geometry=False, dst_crs=False, transform=None,
+    def from_raster(cls, file_name, band=1, src_crs=None, window=None,
+                        geometry=None, dst_crs=None, transform=None,
                         width=None, height=None, resampling=Resampling.nearest):
         """Read raster data and set latitude, longitude, value and meta
 
@@ -476,13 +480,13 @@ class Exposures():
         window : rasterio.windows.Windows, optional
             window where data is
             extracted
-        geometry : shapely.geometry, optional
-            consider pixels only in shape
+        geometry : list of shapely.geometry, optional
+            consider pixels only within these shape
         dst_crs : crs, optional
             reproject to given crs
         transform : rasterio.Affine
             affine transformation to apply
-        wdith : float
+        width : float
             number of lons for transform
         height : float
             number of lats for transform
@@ -494,9 +498,6 @@ class Exposures():
         --------
         Exposures
         """
-        exp = cls()
-        exp.tag = Tag()
-        exp.tag.file_name = str(file_name)
         meta, value = u_coord.read_raster(file_name, [band], src_crs, window,
                                           geometry, dst_crs, transform, width,
                                           height, resampling)
@@ -505,18 +506,20 @@ class Exposures():
         lry = uly + meta['height'] * yres
         x_grid, y_grid = np.meshgrid(np.arange(ulx + xres / 2, lrx, xres),
                                      np.arange(uly + yres / 2, lry, yres))
+        return cls(
+            {
+                'longitude': x_grid.flatten(),
+                'latitude': y_grid.flatten(),
+                'value': value.reshape(-1),
+            },
+            meta=meta,
+            crs=meta['crs'],
+        )
 
-        if exp.crs is None:
-            exp.set_crs()
-        exp.gdf['longitude'] = x_grid.flatten()
-        exp.gdf['latitude'] = y_grid.flatten()
-        exp.gdf['value'] = value.reshape(-1)
-        exp.meta = meta
-        return exp
 
     def plot_scatter(self, mask=None, ignore_zero=False, pop_name=True,
                      buffer=0.0, extend='neither', axis=None, figsize=(9, 13),
-                     adapt_fontsize=True, **kwargs):
+                     adapt_fontsize=True, title=None, **kwargs):
         """Plot exposures geometry's value sum scattered over Earth's map.
         The plot will we projected according to the current crs.
 
@@ -541,17 +544,19 @@ class Exposures():
         adapt_fontsize : bool, optional
             If set to true, the size of the fonts will be adapted to the size of the figure.
             Otherwise the default matplotlib font size is used. Default is True.
+        title : str, optional
+            a title for the plot. If not set `self.description` is used.
         kwargs : optional
             arguments for scatter matplotlib function, e.g.
-            cmap='Greys'. Default: 'Wistia'
+            cmap='Greys'
 
         Returns
         -------
         cartopy.mpl.geoaxes.GeoAxesSubplot
         """
         crs_epsg, _ = u_plot.get_transformation(self.crs)
-        title = self.tag.description
-        cbar_label = 'Value (%s)' % self.value_unit
+        if title is None:
+            title = self.description or ""
         if mask is None:
             mask = np.ones((self.gdf.shape[0],), dtype=bool)
         if ignore_zero:
@@ -561,8 +566,13 @@ class Exposures():
         value = self.gdf.value[mask][pos_vals].values
         coord = np.stack([self.gdf.latitude[mask][pos_vals].values,
                           self.gdf.longitude[mask][pos_vals].values], axis=1)
-        return u_plot.geo_scatter_from_array(value, coord, cbar_label, title,
-                                             pop_name, buffer, extend,
+        return u_plot.geo_scatter_from_array(array_sub=value,
+                                             geo_coord=coord,
+                                             var_name=f'Value ({self.value_unit})',
+                                             title=title,
+                                             pop_name=pop_name,
+                                             buffer=buffer,
+                                             extend=extend,
                                              proj=crs_epsg,
                                              axes=axis,
                                              figsize=figsize,
@@ -571,7 +581,7 @@ class Exposures():
 
     def plot_hexbin(self, mask=None, ignore_zero=False, pop_name=True,
                     buffer=0.0, extend='neither', axis=None, figsize=(9, 13),
-                    adapt_fontsize=True, **kwargs):
+                    adapt_fontsize=True, title=None, **kwargs):
         """Plot exposures geometry's value sum binned over Earth's map.
         An other function for the bins can be set through the key reduce_C_function.
         The plot will we projected according to the current crs.
@@ -600,6 +610,8 @@ class Exposures():
             If set to true, the size of the fonts will be adapted to the size of the figure.
             Otherwise the default matplotlib font size is used.
             Default is True.
+        title : str, optional
+            a title for the plot. If not set `self.description` is used.
         kwargs : optional
             arguments for hexbin matplotlib function, e.g.
             `reduce_C_function=np.average`.
@@ -610,8 +622,8 @@ class Exposures():
         cartopy.mpl.geoaxes.GeoAxesSubplot
         """
         crs_epsg, _ = u_plot.get_transformation(self.crs)
-        title = self.tag.description
-        cbar_label = 'Value (%s)' % self.value_unit
+        if title is None:
+            title = self.description or ""
         if 'reduce_C_function' not in kwargs:
             kwargs['reduce_C_function'] = np.sum
         if mask is None:
@@ -623,9 +635,17 @@ class Exposures():
         value = self.gdf.value[mask][pos_vals].values
         coord = np.stack([self.gdf.latitude[mask][pos_vals].values,
                           self.gdf.longitude[mask][pos_vals].values], axis=1)
-        return u_plot.geo_bin_from_array(value, coord, cbar_label, title,
-                                         pop_name, buffer, extend, proj=crs_epsg,
-                                         axes=axis, figsize=figsize, adapt_fontsize=adapt_fontsize,
+        return u_plot.geo_bin_from_array(array_sub=value,
+                                         geo_coord=coord,
+                                         var_name=f'Value ({self.value_unit})',
+                                         title=title,
+                                         pop_name=pop_name,
+                                         buffer=buffer,
+                                         extend=extend,
+                                         proj=crs_epsg,
+                                         axes=axis,
+                                         figsize=figsize,
+                                         adapt_fontsize=adapt_fontsize,
                                          **kwargs)
 
     def plot_raster(self, res=None, raster_res=None, save_tiff=None,
@@ -730,7 +750,7 @@ class Exposures():
 
     def plot_basemap(self, mask=None, ignore_zero=False, pop_name=True,
                      buffer=0.0, extend='neither', zoom=10,
-                     url=None, axis=None, **kwargs):
+                     url=ctx.providers.CartoDB.Positron, axis=None, **kwargs):
         """Scatter points over satellite image using contextily
 
         Parameters
@@ -752,7 +772,7 @@ class Exposures():
             zoom coefficient used in the satellite image
         url : Any, optional
             image source, e.g., ``ctx.providers.OpenStreetMap.Mapnik``.
-            Default: ``ctx.providers.Stamen.Terrain``
+            Default: ``ctx.providers.CartoDB.Positron``
         axis : matplotlib.axes._subplots.AxesSubplot, optional
             axis to use
         kwargs : optional
@@ -837,6 +857,9 @@ class Exposures():
             for key, val in metadata.items():
                 if key in type(exp)._metadata: # pylint: disable=protected-access
                     setattr(exp, key, val)
+                if key == 'tag':  # for backwards compatitbility with climada <= 3.x
+                    descriptions = [u_hdf5.to_string(x) for x in getattr(val, 'description', [])]
+                    exp.description = "\n".join(descriptions) if descriptions else None
         return exp
 
     def read_mat(self, *args, **kwargs):
@@ -1015,11 +1038,15 @@ class Exposures():
 
         return exp
 
-    def affected_total_value(self, hazard):
-        """
-        Total value of the exposures that are close enough to be affected
-        by the hazard (sum of value of all exposures points for which
-        a centroids is assigned)
+    def centroids_total_value(self, hazard):
+        """Compute value of exposures close enough to be affected by hazard
+
+        .. deprecated:: 3.3
+           This method will be removed in a future version. Use
+           :py:meth:`affected_total_value` instead.
+
+        This method computes the sum of the value of all exposures points for which a
+        Hazard centroid is assigned.
 
         Parameters
         ----------
@@ -1038,6 +1065,59 @@ class Exposures():
             & (self.gdf[hazard.centr_exp_col].values >= 0)
         )
         return np.sum(self.gdf.value.values[nz_mask])
+
+    def affected_total_value(
+        self,
+        hazard: Hazard,
+        threshold_affected: float = 0,
+        overwrite_assigned_centroids: bool = True,
+    ):
+        """
+        Total value of the exposures that are affected by at least
+        one hazard event (sum of value of all exposures points for which
+        at least one event has intensity larger than the threshold).
+
+        Parameters
+        ----------
+        hazard : Hazard
+           Hazard affecting Exposures
+        threshold_affected : int or float
+            Hazard intensity threshold above which an exposures is
+            considere affected.
+            The default is 0.
+        overwrite_assigned_centroids : boolean
+            Assign centroids from the hazard to the exposures and overwrite
+            existing ones.
+            The default is True.
+
+        Returns
+        -------
+        float
+            Sum of value of all exposures points for which
+            a centroids is assigned and that have at least one
+            event intensity above threshold.
+
+        See Also
+        --------
+        Exposures.assign_centroids : method to assign centroids.
+
+        Note
+        ----
+        The fraction attribute of the hazard is ignored. Thus, for hazards
+        with fraction defined the affected values will be overestimated.
+
+        """
+        self.assign_centroids(hazard=hazard, overwrite=overwrite_assigned_centroids)
+        assigned_centroids = self.gdf[hazard.centr_exp_col]
+        nz_mask = (self.gdf.value.values > 0) & (assigned_centroids.values >= 0)
+        cents = np.unique(assigned_centroids[nz_mask])
+        cent_with_inten_above_thres = (
+            hazard.intensity[:, cents].max(axis=0) > threshold_affected
+        ).nonzero()[1]
+        above_thres_mask = np.isin(
+            self.gdf[hazard.centr_exp_col].values, cents[cent_with_inten_above_thres]
+        )
+        return np.sum(self.gdf.value.values[above_thres_mask])
 
 
 def add_sea(exposures, sea_res, scheduler=None):
@@ -1096,7 +1176,7 @@ def add_sea(exposures, sea_res, scheduler=None):
         ref_year=exposures.ref_year,
         value_unit=exposures.value_unit,
         meta=exposures.meta,
-        tag=exposures.tag
+        description=exposures.description,
     )
 
 
@@ -1155,5 +1235,3 @@ def _read_mat_metadata(exposures, data, file_name, var_names):
             file_name, data[var_names['var_name']['uni']][0][0])
     except KeyError:
         exposures.value_unit = DEF_VALUE_UNIT
-
-    exposures.tag = Tag(file_name)
